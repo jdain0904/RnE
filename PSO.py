@@ -43,6 +43,9 @@
 #4-1 : 위치 Clamping
 
 #4-2 : Velocity Clamping
+v_new = np.where(v_new == 0, np.sign(0.5 - rand) * rand * self.v_max, v_new)
+v_new = np.sign(v_new) * np.minimum(np.abs(v_new), self.v_max)
+v_new = np.minimum(np.maximum(v_new, -self.v_max), self.v_max)
 
 #4-3 : 각도 Clamping
 
