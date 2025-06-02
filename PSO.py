@@ -1,4 +1,39 @@
 #1. Initiallization
+ def __init__(self, epoch: int = 10000, pop_size: int = 100, c1: float = 2.05, c2: float = 2.05, w: float = 0.4, **kwargs: object) -> None:
+        """
+        Args:
+            epoch: maximum number of iterations, default = 10000
+            pop_size: number of population size, default = 100
+            c1: [0-2] local coefficient
+            c2: [0-2] global coefficient
+            w_min: Weight min of bird, default = 0.4
+        """
+        super().__init__(**kwargs)
+        self.epoch = self.validator.check_int("epoch", epoch, [1, 100000])
+        self.pop_size = self.validator.check_int("pop_size", pop_size, [5, 10000])
+        self.c1 = self.validator.check_float("c1", c1, (0, 5.0))
+        self.c2 = self.validator.check_float("c2", c2, (0, 5.0))
+        self.w = self.validator.check_float("w", w, (0, 1.0))
+        self.set_parameters(["epoch", "pop_size", "c1", "c2", "w"])
+        self.sort_flag = False
+        self.is_parallelizable = False
+
+    def initialize_variables(self):
+        self.v_max = 0.5 * (self.problem.ub - self.problem.lb)
+        self.v_min = -self.v_max
+
+    def generate_empty_agent(self, solution: np.ndarray = None) -> Agent:
+        if solution is None:
+            solution = self.problem.generate_solution(encoded=True)
+        velocity = self.generator.uniform(self.v_min, self.v_max)
+        local_pos = solution.copy()
+        return Agent(solution=solution, velocity=velocity, local_solution=local_pos)
+
+    def generate_agent(self, solution: np.ndarray = None) -> Agent:
+        agent = self.generate_empty_agent(solution)
+        agent.target = self.get_target(agent.solution)
+        agent.local_target = agent.target.copy()
+        return agent
 
 #2. HPSO 이용 계층화
 
