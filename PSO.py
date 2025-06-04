@@ -21,7 +21,7 @@
     def initialize_variables(self):
         self.v_max = 0.5 * (self.problem.ub - self.problem.lb)
         self.v_min = -self.v_max
-
+    #밑의 함수는 초기 입자를 생성하는 함수인데, 로봇 팔에 적용하는 경우에는 초기 입자 위치를 0,0으로 고정시키므로 후에 고려할 필요가 있음
     def generate_empty_agent(self, solution: np.ndarray = None) -> Agent:
         if solution is None:
             solution = self.problem.generate_solution(encoded=True)
