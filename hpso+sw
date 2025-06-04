@@ -123,9 +123,7 @@ class HierarchicalSlidingPSO:
 
             prev_best_by_joint = {
                 label: min(
-                    self.particle_groups[label],
-                    key=lambda p: p.best_score if p.best_score is not None else float('inf')
-                ).best_position.copy()
+                    self.particle_groups[label], key=lambda p: p.best_score if p.best_score is not None else float('inf')).best_position.copy()
                 for j, label in enumerate(self.joint_labels)
             }
 
