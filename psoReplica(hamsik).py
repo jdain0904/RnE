@@ -34,7 +34,13 @@
         agent.target = self.get_target(agent.solution)
         agent.local_target = agent.target.copy()
         return agent
-
+for t_start in range(0, self.time_horizon, self.sliding_step):
+    t_end=t_start+self.window_size
+    window_time=(t_start,t_end)
+    
+    for epoch in range(self.epoch):
+        for agent in self.population:
+         
     #2. HPSO 이용 계층화
 
     #3. Velocity Calculation
