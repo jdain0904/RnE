@@ -1,83 +1,113 @@
-#1. Initiallization
 import numpy as np
-from mealpy.optimizer import Optimizer
-from mealpy.utils.agent import Agent
+import matplotlib.pyplot as plt
 
+# === 기본 설정 ===
+DOF = 4  # 4자유도
+joint_labels = [f"joint_{i+1}" for i in range(DOF)]
+joint_bounds = [(-np.pi/2, np.pi/2) for _ in range(DOF)]
+target_position = np.array([0.5, 0.5])
 
-class OriginalPSO_RobotArm6DOF(Optimizer):
-    def __init__(self, epoch: int = 1000, pop_size: int = 50, c1: float = 2.05, c2: float = 2.05, w: float = 0.4, **kwargs: object) -> None:
-        super().__init__(**kwargs)
-        self.epoch = self.validator.check_int("epoch", epoch, [1, 100000])
-        self.pop_size = self.validator.check_int("pop_size", pop_size, [5, 10000])
-        self.c1 = self.validator.check_float("c1", c1, (0, 5.0))
-        self.c2 = self.validator.check_float("c2", c2, (0, 5.0))
-        self.w = self.validator.check_float("w", w, (0, 1.0))
-        self.set_parameters(["epoch", "pop_size", "c1", "c2", "w"])
-        self.sort_flag = False
-        self.is_parallelizable = False
+# === 순기구학 ===
+def forward_kinematics(joint_angles, link_lengths=[0.3, 0.3, 0.2, 0.1]):
+    x, y, theta = 0, 0, 0
+    for angle, length in zip(joint_angles, link_lengths):
+        theta += angle
+        x += length * np.cos(theta)
+        y += length * np.sin(theta)
+    return np.array([x, y])
 
-    def initialize_variables(self):
-        self.v_max = 0.5 * (self.problem.ub - self.problem.lb)
-        self.v_min = -self.v_max
+# === 목적 함수 ===
+def fitness_function(joint_angles):
+    end_effector = forward_kinematics(joint_angles)
+    return np.linalg.norm(end_effector - target_position)
 
-    def generate_empty_agent(self, solution: np.ndarray = None) -> Agent:
-        if solution is None:
-            solution = self.problem.generate_solution(encoded=True)
-        velocity = self.generator.uniform(self.v_min, self.v_max)
-        local_pos = solution.copy()
-        return Agent(solution=solution, velocity=velocity, local_solution=local_pos)
+# === Particle 정의 ===
+class Particle:
+    def __init__(self, label, bounds):
+        self.label = label  # 관절 이름 (예: 'joint_1')
+        self.position = np.array([np.random.uniform(*bounds)])
+        self.velocity = np.zeros(1)
+        self.best_position = self.position.copy()
+        self.best_score = None
 
-    def generate_agent(self, solution: np.ndarray = None) -> Agent:
-        agent = self.generate_empty_agent(solution)
-        agent.target = self.get_target(agent.solution)
-        agent.local_target = agent.target.copy()
-        return agent
+# === Hierarchical PSO 클래스 정의 ===
+class HPSO:
+    def __init__(self, joint_labels, particles_per_joint, bounds, max_iter):
+        self.joint_labels = joint_labels
+        self.bounds = bounds
+        self.max_iter = max_iter
+        self.dim = len(joint_labels)
 
-    def amend_solution(self, solution: np.ndarray) -> np.ndarray:
-        condition = np.logical_and(self.problem.lb <= solution, solution <= self.problem.ub)
-        pos_rand = self.generator.uniform(self.problem.lb, self.problem.ub)
-        return np.where(condition, solution, pos_rand)
+        self.particle_groups = {
+            label: [Particle(label, bounds[i]) for _ in range(particles_per_joint)]
+            for i, label in enumerate(joint_labels)
+        }
 
-    def evolve(self, epoch):
-        for idx in range(0, self.pop_size):
-            r1 = self.generator.random(self.problem.n_dims)
-            r2 = self.generator.random(self.problem.n_dims)
-            cognitive = self.c1 * r1 * (self.pop[idx].local_solution - self.pop[idx].solution)
-            social = self.c2 * r2 * (self.g_best.solution - self.pop[idx].solution)
-            v_new = self.w * self.pop[idx].velocity + cognitive + social
+        self.gbest = np.zeros(self.dim)
+        self.gbest_score = float('inf')
 
-            # Velocity clamping in our pseudocode style
-            r3 = self.generator.random(self.problem.n_dims)
-            r4 = self.generator.random(self.problem.n_dims)
-            r5 = self.generator.random(self.problem.n_dims)
+    def optimize(self):
+        for _ in range(self.max_iter):
+            num_particles = len(next(iter(self.particle_groups.values())))
 
-            v_new = np.where(v_new == 0, np.where(r3 < 0.5, r4 * self.v_max, -r5 * self.v_max), v_new)
-            v_new = np.sign(v_new) * np.minimum(np.abs(v_new), self.v_max)
-            v_new = np.minimum(np.maximum(v_new, -self.v_max), self.v_max)
+            for i in range(num_particles):
+                candidate = np.array([
+                    self.particle_groups[label][i].position[0]
+                    for label in self.joint_labels
+                ])
+                score = fitness_function(candidate)
 
-            self.pop[idx].velocity = v_new
-            pos_new = self.pop[idx].solution + self.pop[idx].velocity
-            pos_new = self.correct_solution(pos_new)
-            target = self.get_target(pos_new)
-            if self.compare_target(target, self.pop[idx].target, self.problem.minmax):
-                self.pop[idx].update(solution=pos_new.copy(), target=target.copy())
-            if self.compare_target(target, self.pop[idx].local_target, self.problem.minmax):
-                self.pop[idx].update(local_solution=pos_new.copy(), local_target=target.copy())
+                if score < self.gbest_score:
+                    self.gbest_score = score
+                    self.gbest = candidate.copy()
 
-#2. HPSO 이용 계층화
+                for j, label in enumerate(self.joint_labels):
+                    p = self.particle_groups[label][i]
+                    if p.best_score is None or score < p.best_score:
+                        p.best_score = score
+                        p.best_position = np.array([candidate[j]])
 
-#3. Velocity Calculation
+            # PSO 업데이트
+            w, c1, c2 = 0.5, 1.5, 1.5
+            for j, label in enumerate(self.joint_labels):
+                for p in self.particle_groups[label]:
+                    r1, r2 = np.random.rand(), np.random.rand()
+                    p.velocity = (
+                        w * p.velocity
+                        + c1 * r1 * (p.best_position - p.position)
+                        + c2 * r2 * (self.gbest[j] - p.position)
+                    )
+                    p.position += p.velocity
+                    low, high = self.bounds[j]
+                    p.position = np.clip(p.position, low, high)
 
-#4. Clamping
-#4-1 : 위치 Clamping
+        return self.gbest, self.gbest_score
 
-#4-2 : Velocity Clamping
-v_new = np.where(v_new == 0, np.where(r3 < 0.5, r4 * self.v_max, -r5 * self.v_max), v_new)
-v_new = np.sign(v_new) * np.minimum(np.abs(v_new), self.v_max)
-v_new = np.minimum(np.maximum(v_new, -self.v_max), self.v_max)
+# === 최적화 실행 ===
+hpso = HPSO(joint_labels=joint_labels, particles_per_joint=30, bounds=joint_bounds, max_iter=100)
+best_angles, best_score = hpso.optimize()
 
-#4-3 : 각도 Clamping
+print("최적 관절 각도 (radian):")
+for label, angle in zip(joint_labels, best_angles):
+    print(f"{label}: {angle:.4f}")
+print("최종 위치 오차:", best_score)
 
-#5. Position update
+# === 결과 시각화 ===
+def plot_arm(joint_angles, target, link_lengths=[0.3, 0.3, 0.2, 0.1]):
+    x, y, theta = 0, 0, 0
+    X, Y = [0], [0]
+    for angle, length in zip(joint_angles, link_lengths):
+        theta += angle
+        x += length * np.cos(theta)
+        y += length * np.sin(theta)
+        X.append(x)
+        Y.append(y)
+    plt.plot(X, Y, '-o', label='Robot Arm')
+    plt.plot(target[0], target[1], 'rx', label='Target')
+    plt.axis('equal')
+    plt.grid(True)
+    plt.legend()
+    plt.title('Hierarchical PSO - 4DOF Robot Arm')
+    plt.show()
 
-#6. Evaluation
+plot_arm(best_angles, target_position)
