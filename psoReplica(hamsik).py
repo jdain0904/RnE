@@ -10,12 +10,11 @@ from mpl_toolkits.mplot3d import Axes3D
 DOF = 4
 joint_labels = [f"joint_{i+1}" for i in range(DOF)]
 joint_bounds = [(-np.pi/2, np.pi/2) for _ in range(DOF)]
-gbest_history = []
 
 # 로봇팔 최대 작업반경 내에서 타깃 생성
 def random_reachable_target(radius=0.9):
     while True:
-        point = np.random.uniform(-radius, radius, 3)
+        point = np.random.uniform(0, radius, 3)  # 모든 좌표를 양수로 제한
         if np.linalg.norm(point) <= radius:
             return point
 
@@ -23,14 +22,14 @@ target_position = random_reachable_target()
 
 # 순기구학 (3D)
 def forward_kinematics_3d(joint_angles, link_lengths=[0.3, 0.3, 0.2, 0.1]):
-    coords = [(0, 0, 0)]
     x, y, z = 0, 0, 0
     theta_y, theta_z = 0, 0
+    coords = [(x, y, z)]
     for i, (angle, length) in enumerate(zip(joint_angles, link_lengths)):
         if i % 2 == 0:
-            theta_y += angle  # YZ 평면 회전
+            theta_y += angle
         else:
-            theta_z += angle  # XZ 평면 회전
+            theta_z += angle
         dx = length * np.cos(theta_y) * np.cos(theta_z)
         dy = length * np.sin(theta_y)
         dz = length * np.cos(theta_y) * np.sin(theta_z)
@@ -50,7 +49,7 @@ class Particle:
     def __init__(self, label, bounds):
         self.label = label
         self.position = np.array([np.random.uniform(*bounds)])
-        self.velocity = np.zeros(1)
+        self.velocity = np.random.uniform(-0.1, 0.1, size=1)
         self.best_position = self.position.copy()
         self.best_score = None
 
@@ -74,6 +73,7 @@ class HPSO:
         self.gbest_score = float('inf')
 
     def optimize(self):
+        gbest_history = []
         prev_best_by_joint = {}
         for t_start in range(0, self.time_horizon, self.sliding_step):
             t_end = t_start + self.window_size
@@ -81,12 +81,13 @@ class HPSO:
             if prev_best_by_joint:
                 for j, label in enumerate(self.joint_labels):
                     for i in range(min(5, self.particles_per_joint)):
-                        self.particle_groups[label][i].position = prev_best_by_joint[label].copy()
+                        p = self.particle_groups[label][i]
+                        p.position = prev_best_by_joint[label].copy()
+                        p.best_position = prev_best_by_joint[label].copy()
+                        p.best_score = None
+                        p.velocity = np.random.uniform(-0.05, 0.05, size=1)
 
             for iteration in range(self.max_iter):
-                # ==========================================
-                # [2] Calculation: 현재 위치 기반 평가
-                # ==========================================
                 num_particles = self.particles_per_joint
                 for i in range(num_particles):
                     candidate = np.array([
@@ -95,9 +96,6 @@ class HPSO:
                     ])
                     score = fitness_function(candidate)
 
-                    # ==========================================
-                    # [4] Evaluation: 개인/전역 최적 업데이트
-                    # ==========================================
                     if score < self.gbest_score:
                         self.gbest_score = score
                         self.gbest = candidate.copy()
@@ -109,9 +107,6 @@ class HPSO:
 
                 gbest_history.append(self.gbest.copy())
 
-                # ==========================================
-                # [3] Position Update: 속도 및 위치 갱신
-                # ==========================================
                 w, c1, c2 = 0.5, 1.5, 1.5
                 for j, label in enumerate(self.joint_labels):
                     for p in self.particle_groups[label]:
@@ -125,9 +120,6 @@ class HPSO:
                         low, high = self.bounds[j]
                         p.position = np.clip(p.position, low, high)
 
-            # =========================================
-            # 윈도우의 최적해를 다음 윈도우로 전송
-            # =========================================
             prev_best_by_joint = {}
             for j, label in enumerate(self.joint_labels):
                 best_particle = min(
@@ -136,13 +128,11 @@ class HPSO:
                 )
                 prev_best_by_joint[label] = best_particle.best_position.copy()
 
-        return self.gbest, self.gbest_score
+        return self.gbest, self.gbest_score, gbest_history
 
-# ==========================================
 # 최적화 수행
-# ==========================================
-hpso = HPSO(joint_labels=joint_labels, particles_per_joint=30, bounds=joint_bounds, max_iter=100)
-best_angles, best_score = hpso.optimize()
+hpso = HPSO(joint_labels=joint_labels, particles_per_joint=50, bounds=joint_bounds, max_iter=200)
+best_angles, best_score, gbest_history = hpso.optimize()
 
 print("최적 관절 각도 (radian):")
 for label, angle in zip(joint_labels, best_angles):
@@ -150,9 +140,8 @@ for label, angle in zip(joint_labels, best_angles):
 print("최종 위치 오차:", best_score)
 print("목표 위치 (target):", target_position)
 
-# ==========================================
-# 결과 시각화 (3D 애니메이션)
-# ==========================================
+# 결과 시각화
+
 def animate_arm_3d(gbest_history, target, link_lengths=[0.3, 0.3, 0.2, 0.1]):
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
