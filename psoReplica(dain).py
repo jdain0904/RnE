@@ -1,7 +1,5 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from mealpy.optimizer import Optimizer
-from mealpy.utils.agent import Agent
 import matplotlib.animation as animation
 from mpl_toolkits.mplot3d import Axes3D
 
