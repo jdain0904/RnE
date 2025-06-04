@@ -40,9 +40,22 @@ class OriginalPSO_RobotArm6DOF(Optimizer):
 
     def evolve(self, epoch):
         for idx in range(0, self.pop_size):
-            cognitive = self.c1 * self.generator.random(self.problem.n_dims) * (self.pop[idx].local_solution - self.pop[idx].solution)
-            social = self.c2 * self.generator.random(self.problem.n_dims) * (self.g_best.solution - self.pop[idx].solution)
-            self.pop[idx].velocity = self.w * self.pop[idx].velocity + cognitive + social
+            r1 = self.generator.random(self.problem.n_dims)
+            r2 = self.generator.random(self.problem.n_dims)
+            cognitive = self.c1 * r1 * (self.pop[idx].local_solution - self.pop[idx].solution)
+            social = self.c2 * r2 * (self.g_best.solution - self.pop[idx].solution)
+            v_new = self.w * self.pop[idx].velocity + cognitive + social
+
+            # Velocity clamping in our pseudocode style
+            r3 = self.generator.random(self.problem.n_dims)
+            r4 = self.generator.random(self.problem.n_dims)
+            r5 = self.generator.random(self.problem.n_dims)
+
+            v_new = np.where(v_new == 0, np.where(r3 < 0.5, r4 * self.v_max, -r5 * self.v_max), v_new)
+            v_new = np.sign(v_new) * np.minimum(np.abs(v_new), self.v_max)
+            v_new = np.minimum(np.maximum(v_new, -self.v_max), self.v_max)
+
+            self.pop[idx].velocity = v_new
             pos_new = self.pop[idx].solution + self.pop[idx].velocity
             pos_new = self.correct_solution(pos_new)
             target = self.get_target(pos_new)
@@ -59,7 +72,7 @@ class OriginalPSO_RobotArm6DOF(Optimizer):
 #4-1 : 위치 Clamping
 
 #4-2 : Velocity Clamping
-v_new = np.where(v_new == 0, np.sign(0.5 - rand) * rand * self.v_max, v_new)
+v_new = np.where(v_new == 0, np.where(r3 < 0.5, r4 * self.v_max, -r5 * self.v_max), v_new)
 v_new = np.sign(v_new) * np.minimum(np.abs(v_new), self.v_max)
 v_new = np.minimum(np.maximum(v_new, -self.v_max), self.v_max)
 
