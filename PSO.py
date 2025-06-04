@@ -35,20 +35,20 @@
         agent.local_target = agent.target.copy()
         return agent
 
-#2. HPSO 이용 계층화
+    #2. HPSO 이용 계층화
 
-#3. Velocity Calculation
+    #3. Velocity Calculation
 
-#4. Clamping
-#4-1 : 위치 Clamping
+    #4. Clamping
+    #4-1 : 위치 Clamping
 
-#4-2 : Velocity Clamping
-v_new = np.where(v_new == 0, np.sign(0.5 - rand) * rand * self.v_max, v_new)
-v_new = np.sign(v_new) * np.minimum(np.abs(v_new), self.v_max)
-v_new = np.minimum(np.maximum(v_new, -self.v_max), self.v_max)
+    #4-2 : Velocity Clamping
+     v_new = np.where(v_new == 0, np.sign(0.5 - rand) * rand * self.v_max, v_new)
+     v_new = np.sign(v_new) * np.minimum(np.abs(v_new), self.v_max)
+     v_new = np.minimum(np.maximum(v_new, -self.v_max), self.v_max)
 
-#4-3 : 각도 Clamping
+    #4-3 : 각도 Clamping
 
-#5. Position update
+    #5. Position update
 
-#6. Evaluation
+    #6. Evaluation
