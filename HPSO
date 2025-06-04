@@ -2,6 +2,10 @@
 # 직접 구현한 HPSO 기반 4자유도 로봇팔 경로 계획 및 애니메이션 시각화
 # clipping, svm 안넣은 그냥 hpso
 # ==========================================
+# ==========================================
+# 직접 구현한 HPSO 기반 4자유도 로봇팔 경로 계획 및 애니메이션 시각화
+# clipping, svm 안넣은 그냥 hpso
+# ==========================================
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -63,7 +67,7 @@ def hpso_inverse_kinematics_with_frames(target, pop_size=10, max_iter=200, w=0.5
         particle["pbest_pos"] = np.copy(particle["position"])
 
     def evaluate(angles_group):
-        configs = np.stack(angles_group, axis=1)  # shape: (pop_size, DOF)
+        configs = np.stack(angles_group, axis=1)
         fitnesses = np.linalg.norm(forward_kinematics_3d(configs.T)[-1] - target, axis=-1)
         return fitnesses
 
@@ -103,10 +107,8 @@ def hpso_inverse_kinematics_with_frames(target, pop_size=10, max_iter=200, w=0.5
 target = random_reachable_target()
 pso_angles, pso_error, gbest_frames = hpso_inverse_kinematics_with_frames(target)
 
-# 수렴곡선용 오차 계산
 errors = [np.linalg.norm(forward_kinematics_3d(angles)[-1] - target) for angles in gbest_frames]
 
-# 수렴 곡선 플롯
 plt.figure()
 plt.plot(errors, marker='o')
 plt.title('HPSO Convergence Curve')
@@ -147,8 +149,7 @@ def update(frame):
     return line_pso, frame_text
 
 ani = FuncAnimation(fig, update, frames=max_frames, init_func=init,
-                    interval=100, blit=False)
+                    interval=100, blit=False, repeat=False)
 
-plt.legend()
 plt.legend()
 plt.show()
