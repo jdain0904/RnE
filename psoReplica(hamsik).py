@@ -125,7 +125,14 @@ class HPSO:
                     p.position += p.velocity
                     low, high = self.bounds[j]
                     p.position = np.clip(p.position, low, high)
-
+             # =========================================
+             # 윈도우의 최적해를 다음 윈도우로 전송
+             # =========================================
+             prev_best_by_joint={}
+             for j,label in enumarte(self.joint_labels):
+                best_particle= min(self.particle_groups[label], key=lambda p: p.best_score if p.best_score is not None else float('inf'))
+                prev_best_by_joint[label]=best_particle.best_position.copy()
+                
         return self.gbest, self.gbest_score
 
 # ==========================================
