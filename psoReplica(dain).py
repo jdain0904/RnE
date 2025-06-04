@@ -12,10 +12,10 @@ joint_labels = [f"joint_{i+1}" for i in range(DOF)]
 joint_bounds = [(-np.pi/2, np.pi/2) for _ in range(DOF)]
 gbest_history = []
 
-# 로봇팔 최대 작업반경 내에서 타깃 생성
-def random_reachable_target(radius=0.9):
+# 실제 접근 가능한 작업 공간에서 타깃 생성 (전방 반구 내)
+def random_reachable_target(radius=0.9, z_min=-0.1, z_max=0.5):
     while True:
-        point = np.random.uniform(-radius, radius, 3)
+        point = np.random.uniform(low=[0.0, -radius, z_min], high=[radius, radius, z_max])
         if np.linalg.norm(point) <= radius:
             return point
 
@@ -40,7 +40,7 @@ def forward_kinematics_3d(joint_angles, link_lengths=[0.3, 0.3, 0.2, 0.1]):
         coords.append((x, y, z))
     return np.array(coords)
 
-# 목적 함수: 종단위치와 타깃 거리
+# 목적 함수
 def fitness_function(joint_angles):
     end_effector = forward_kinematics_3d(joint_angles)[-1]
     return np.linalg.norm(end_effector - target_position)
@@ -127,7 +127,7 @@ print("최종 위치 오차:", best_score)
 print("목표 위치 (target):", target_position)
 
 # ==========================================
-# 결과 시각화 (3D 애니메이션)
+# 3D 애니메이션 시각화
 # ==========================================
 def animate_arm_3d(gbest_history, target, link_lengths=[0.3, 0.3, 0.2, 0.1]):
     fig = plt.figure()
