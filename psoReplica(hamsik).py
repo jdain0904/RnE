@@ -61,10 +61,11 @@ class HPSO:
         self.bounds = bounds
         self.max_iter = max_iter
         self.dim = len(joint_labels)
-        self.time_horizon=100
-        self.window_size=10
-        self.sliding_step=5
-        self.particle_per_joint=particle_per_joint
+        self.time_horizon = 100
+        self.window_size = 10
+        self.sliding_step = 5
+        self.particles_per_joint = particles_per_joint
+
         self.particle_groups = {
             label: [Particle(label, bounds[i]) for _ in range(particles_per_joint)]
             for i, label in enumerate(joint_labels)
@@ -73,66 +74,68 @@ class HPSO:
         self.gbest_score = float('inf')
 
     def optimize(self):
-     prev_best_by_joint={}:
-     for t_start in range(0,self.time_horizon,self.sliding_step):
-        t_end = t_start + self.window_size
-        window_time = (t_start, t_end)
-        if prev_best_by_joint:
-           for j,label in enumarate(self.joint_labels):
-               for i in range(min(5, self.particles_per_joint):
-                   self.particle_groups[label][i].position=prev_best_by_joint[label].copy()
-             
-                         
-        for iteration in range(self.max_iter):
-
-            # ==========================================
-            # [2] Calculation: 현재 위치 기반 평가
-            # ==========================================
-            num_particles = len(next(iter(self.particle_groups.values())))
-            for i in range(num_particles):
-                candidate = np.array([
-                    self.particle_groups[label][i].position[0]
-                    for label in self.joint_labels
-                ])
-                score = fitness_function(candidate)
-
-                # ==========================================
-                # [4] Evaluation: 개인/전역 최적 업데이트
-                # ==========================================
-                if score < self.gbest_score:
-                    self.gbest_score = score
-                    self.gbest = candidate.copy()
+        prev_best_by_joint = {}
+        for t_start in range(0, self.time_horizon, self.sliding_step):
+            t_end = t_start + self.window_size
+            window_time = (t_start, t_end)
+            if prev_best_by_joint:
                 for j, label in enumerate(self.joint_labels):
-                    p = self.particle_groups[label][i]
-                    if p.best_score is None or score < p.best_score:
-                        p.best_score = score
-                        p.best_position = np.array([candidate[j]])
+                    for i in range(min(5, self.particles_per_joint)):
+                        self.particle_groups[label][i].position = prev_best_by_joint[label].copy()
 
-            gbest_history.append(self.gbest.copy())
+            for iteration in range(self.max_iter):
+                # ==========================================
+                # [2] Calculation: 현재 위치 기반 평가
+                # ==========================================
+                num_particles = self.particles_per_joint
+                for i in range(num_particles):
+                    candidate = np.array([
+                        self.particle_groups[label][i].position[0]
+                        for label in self.joint_labels
+                    ])
+                    score = fitness_function(candidate)
 
-            # ==========================================
-            # [3] Position Update: 속도 및 위치 갱신
-            # ==========================================
-            w, c1, c2 = 0.5, 1.5, 1.5
+                    # ==========================================
+                    # [4] Evaluation: 개인/전역 최적 업데이트
+                    # ==========================================
+                    if score < self.gbest_score:
+                        self.gbest_score = score
+                        self.gbest = candidate.copy()
+                    for j, label in enumerate(self.joint_labels):
+                        p = self.particle_groups[label][i]
+                        if p.best_score is None or score < p.best_score:
+                            p.best_score = score
+                            p.best_position = np.array([candidate[j]])
+
+                gbest_history.append(self.gbest.copy())
+
+                # ==========================================
+                # [3] Position Update: 속도 및 위치 갱신
+                # ==========================================
+                w, c1, c2 = 0.5, 1.5, 1.5
+                for j, label in enumerate(self.joint_labels):
+                    for p in self.particle_groups[label]:
+                        r1, r2 = np.random.rand(), np.random.rand()
+                        p.velocity = (
+                            w * p.velocity
+                            + c1 * r1 * (p.best_position - p.position)
+                            + c2 * r2 * (self.gbest[j] - p.position)
+                        )
+                        p.position += p.velocity
+                        low, high = self.bounds[j]
+                        p.position = np.clip(p.position, low, high)
+
+            # =========================================
+            # 윈도우의 최적해를 다음 윈도우로 전송
+            # =========================================
+            prev_best_by_joint = {}
             for j, label in enumerate(self.joint_labels):
-                for p in self.particle_groups[label]:
-                    r1, r2 = np.random.rand(), np.random.rand()
-                    p.velocity = (
-                        w * p.velocity
-                        + c1 * r1 * (p.best_position - p.position)
-                        + c2 * r2 * (self.gbest[j] - p.position)
-                    )
-                    p.position += p.velocity
-                    low, high = self.bounds[j]
-                    p.position = np.clip(p.position, low, high)
-             # =========================================
-             # 윈도우의 최적해를 다음 윈도우로 전송
-             # =========================================
-             prev_best_by_joint={}
-             for j,label in enumarte(self.joint_labels):
-                best_particle= min(self.particle_groups[label], key=lambda p: p.best_score if p.best_score is not None else float('inf'))
-                prev_best_by_joint[label]=best_particle.best_position.copy()
-                
+                best_particle = min(
+                    self.particle_groups[label],
+                    key=lambda p: p.best_score if p.best_score is not None else float('inf')
+                )
+                prev_best_by_joint[label] = best_particle.best_position.copy()
+
         return self.gbest, self.gbest_score
 
 # ==========================================
@@ -169,8 +172,7 @@ def animate_arm_3d(gbest_history, target, link_lengths=[0.3, 0.3, 0.2, 0.1]):
         ax.set_title(f'Iteration {frame + 1}')
         return line,
 
-    ani = animation.FuncAnimation(fig, update, frames=len(gbest_history),
-                                  interval=300, blit=True, repeat=False)
+    ani = animation.FuncAnimation(fig, update, frames=len(gbest_history), interval=300, blit=True, repeat=False)
     plt.show()
 
 animate_arm_3d(gbest_history, target_position)
