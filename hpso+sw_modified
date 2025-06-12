@@ -1,0 +1,231 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+from mpl_toolkits.mplot3d import Axes3D
+
+# ==============================
+# [1] 환경 설정
+# ==============================
+
+DOF = 4
+joint_labels = [f"joint_{i+1}" for i in range(DOF)]
+joint_bounds = [(-np.pi/2, np.pi/2) for _ in range(DOF)]
+link_lengths = [0.3, 0.3, 0.2, 0.1]
+
+np.random.seed(42)
+
+def forward_kinematics_3d(joint_angles):
+    x, y, z = 0, 0, 0
+    theta_y, theta_z = 0, 0
+    coords = [(x, y, z)]
+    for i, (angle, length) in enumerate(zip(joint_angles, link_lengths)):
+        if i % 2 == 0:
+            theta_y += angle
+        else:
+            theta_z += angle
+        dx = length * np.cos(theta_y) * np.cos(theta_z)
+        dy = length * np.sin(theta_y)
+        dz = length * np.cos(theta_y) * np.sin(theta_z)
+        x += dx
+        y += dy
+        z += dz
+        coords.append((x, y, z))
+    return np.array(coords)
+
+def random_reachable_target(radius=0.9, z_min=-0.1, z_max=0.5):
+    while True:
+        point = np.random.uniform(low=[0.0, -radius, z_min], high=[radius, radius, z_max])
+        if np.linalg.norm(point) <= radius:
+            return point
+
+def fitness_function(joint_angles, target):
+    end_effector = forward_kinematics_3d(joint_angles)[-1]
+    return np.linalg.norm(end_effector - target)
+
+# ==============================
+# [2] HPSO + Sliding Window 구조
+# ==============================
+
+class HierarchicalSlidingPSO:
+    def __init__(self, joint_labels, pop_size, num_clusters, bounds, max_iter, window_size=10, sliding_step=5, total_iterations=50):
+        self.joint_labels = joint_labels
+        self.bounds = bounds
+        self.max_iter = max_iter  # 각 윈도우 내 반복 수
+        self.dim = len(joint_labels)
+        self.total_iterations = total_iterations  # 전체 반복 수
+        self.window_size = window_size
+        self.sliding_step = sliding_step
+        self.pop_size = pop_size
+        self.num_clusters = num_clusters
+        
+        self.gbest_score = float('inf')
+        self.gbest = np.zeros(self.dim)
+
+    def create_clusters(self):
+        """새로운 클러스터 생성"""
+        clusters = []
+        for _ in range(self.num_clusters):
+            cluster = []
+            for _ in range(self.pop_size):
+                position = np.array([np.random.uniform(low, high) for (low, high) in self.bounds])
+                velocity = np.zeros(self.dim)
+                particle = {
+                    "position": position,
+                    "velocity": velocity,
+                    "pbest_pos": position.copy(),
+                    "pbest_val": float('inf')
+                }
+                cluster.append(particle)
+            clusters.append(cluster)
+        return clusters
+
+    def optimize(self, target):
+        gbest_history = []
+        iteration_count = 0
+        
+        # Sliding Window 방식으로 진행
+        window_start = 0
+        prev_window_best = None
+        
+        while iteration_count < self.total_iterations:
+            # 새로운 윈도우 시작
+            clusters = self.create_clusters()
+            
+            # 이전 윈도우의 최적해를 현재 윈도우에 적용 (Sliding Window 핵심)
+            if prev_window_best is not None:
+                # 각 클러스터의 일부 파티클을 이전 윈도우의 최적해로 초기화
+                for cluster_idx, cluster in enumerate(clusters):
+                    init_count = min(3, self.pop_size // 2)  # 절반 정도만 초기화
+                    for i in range(init_count):
+                        cluster[i]["position"] = prev_window_best["position"] + np.random.normal(0, 0.1, self.dim)
+                        # 경계 조건 적용
+                        for j in range(self.dim):
+                            cluster[i]["position"][j] = np.clip(cluster[i]["position"][j], 
+                                                              self.bounds[j][0], self.bounds[j][1])
+                        cluster[i]["pbest_pos"] = cluster[i]["position"].copy()
+                        cluster[i]["velocity"] = np.random.uniform(-0.05, 0.05, size=self.dim)
+            
+            # 현재 윈도우에서 HPSO 실행
+            window_iterations = min(self.window_size, self.total_iterations - iteration_count)
+            
+            for iter_in_window in range(window_iterations):
+                # 각 파티클의 적응도 평가 및 pbest 업데이트
+                for cluster in clusters:
+                    for p in cluster:
+                        error = fitness_function(p["position"], target)
+                        if error < p["pbest_val"]:
+                            p["pbest_val"] = error
+                            p["pbest_pos"] = p["position"].copy()
+
+                # 전역 최적해 업데이트
+                current_best = min((p for c in clusters for p in c), key=lambda x: x['pbest_val'])
+                if current_best['pbest_val'] < self.gbest_score:
+                    self.gbest_score = current_best['pbest_val']
+                    self.gbest = current_best['pbest_pos'].copy()
+
+                gbest_history.append(self.gbest.copy())
+                iteration_count += 1
+
+                # HPSO 업데이트 (계층적 구조)
+                w, c1, c2 = 0.5, 1.5, 1.5
+                for cluster in clusters:
+                    # 각 클러스터의 최적해 (부모 노드)
+                    parent_best = min(cluster, key=lambda x: x['pbest_val'])['pbest_pos']
+                    
+                    for p in cluster:
+                        r1, r2 = np.random.rand(self.dim), np.random.rand(self.dim)
+                        
+                        # 계층적 사회 성분: 클러스터 최적해 + 전역 최적해
+                        cognitive = c1 * r1 * (p["pbest_pos"] - p["position"])
+                        social_local = c2 * r2 * 0.7 * (parent_best - p["position"])  # 클러스터 최적해
+                        social_global = c2 * r2 * 0.3 * (self.gbest - p["position"])  # 전역 최적해
+                        
+                        # 속도 및 위치 업데이트
+                        p["velocity"] = w * p["velocity"] + cognitive + social_local + social_global
+                        p["position"] += p["velocity"]
+                        
+                        # 경계 조건 적용
+                        for i in range(self.dim):
+                            p["position"][i] = np.clip(p["position"][i], self.bounds[i][0], self.bounds[i][1])
+
+            # 현재 윈도우의 최적해 저장 (다음 윈도우에서 사용)
+            prev_window_best = {
+                "position": self.gbest.copy(),
+                "score": self.gbest_score
+            }
+            
+            # 윈도우 슬라이딩
+            window_start += self.sliding_step
+
+        return self.gbest, self.gbest_score, gbest_history
+
+# ==============================
+# [3] 실행 및 시각화
+# ==============================
+
+target = random_reachable_target()
+hpso_sw = HierarchicalSlidingPSO(
+    joint_labels, 
+    pop_size=20, 
+    num_clusters=4, 
+    bounds=joint_bounds, 
+    max_iter=10,  # 각 윈도우 내 반복 수
+    window_size=10,
+    sliding_step=5,
+    total_iterations=50  # 전체 반복 수
+)
+best_angles, best_error, gbest_history = hpso_sw.optimize(target)
+
+print("최적 관절 각도 (rad):", best_angles)
+print("최종 오차:", best_error)
+print("목표 위치:", target)
+
+# 수렴 곡선 시각화 (두 번째 코드 스타일 적용)
+errors = [fitness_function(angles, target) for angles in gbest_history]
+plt.figure()
+plt.plot(errors, marker='o')
+plt.title('HPSO + Sliding Window Convergence Curve')
+plt.xlabel('Iteration')
+plt.ylabel('Error (Distance to Target)')
+plt.grid(True)
+plt.show()
+
+# 애니메이션 좌표 시퀀스 준비
+coords_seq = [forward_kinematics_3d(angles) for angles in gbest_history]
+max_frames = len(gbest_history)
+
+# 3D 애니메이션 시각화 (두 번째 코드 스타일 적용)
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+ax.set_xlim([-1, 1])
+ax.set_ylim([-1, 1])
+ax.set_zlim([-1, 1])
+ax.set_title("HPSO + Sliding Window based 4DOF Robot Arm Optimization")
+target_point = ax.scatter(*target, color='red', label='Target')
+line_hpso, = ax.plot([], [], [], '-o', color='green', label='HPSO+SW')
+frame_text = ax.text2D(0.05, 0.95, '', transform=ax.transAxes)
+
+def init():
+    line_hpso.set_data([], [])
+    line_hpso.set_3d_properties([])
+    frame_text.set_text('')
+    return line_hpso, frame_text
+
+def update(frame):
+    if frame < len(coords_seq):
+        coords = coords_seq[frame]
+        line_hpso.set_data(coords[:, 0], coords[:, 1])
+        line_hpso.set_3d_properties(coords[:, 2])
+    frame_text.set_text(f"Frame {frame + 1}/{max_frames}")
+    return line_hpso, frame_text
+
+ani = animation.FuncAnimation(fig, update, frames=max_frames, init_func=init,
+                             interval=100, blit=False, repeat=False)
+
+plt.legend()
+plt.show()
+
+# 결과 출력 (두 번째 코드 스타일 적용)
+rel_error = best_error / np.linalg.norm(target)
+print(f"절대 오차 (m): {best_error:.20f} m")
+print(f"상대 오차율: {rel_error:.10%}")
