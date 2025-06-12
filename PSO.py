@@ -44,7 +44,7 @@ def random_reachable_target(radius=0.9, z_min=-0.1, z_max=0.5):
 # [2] 정식 PSO 알고리즘 구현
 # ==========================================
 
-def pso_inverse_kinematics_with_frames(target, pop_size=20, max_iter=100, w=0.5, c1=1.5, c2=1.5):
+def pso_inverse_kinematics_with_frames(target, pop_size=20, max_iter=50, w=0.5, c1=1.5, c2=1.5):
     gbest_history = []
 
     particles = []
