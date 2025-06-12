@@ -44,7 +44,7 @@ def random_reachable_target(radius=0.9, z_min=-0.1, z_max=0.5):
 # [2] 정식 HPSO 알고리즘 구현 (군집 + 계층)
 # ==========================================
 
-def hpso_inverse_kinematics_with_frames(target, pop_size=20, num_clusters=4, max_iter=200, w=0.5, c1=1.5, c2=1.5):
+def hpso_inverse_kinematics_with_frames(target, pop_size=20, num_clusters=4, max_iter=50, w=0.5, c1=1.5, c2=1.5):
     gbest_history = []
 
     clusters = []
@@ -143,3 +143,7 @@ ani = FuncAnimation(fig, update, frames=max_frames, init_func=init,
 
 plt.legend()
 plt.show()
+
+rel_error = pso_error / np.linalg.norm(target)
+print(f"절대 오차 (m): {pso_error:.20f} m")
+print(f"상대 오차율: {rel_error:.10%}")
