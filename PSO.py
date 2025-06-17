@@ -102,7 +102,7 @@ errors = [np.linalg.norm(forward_kinematics_3d(angles)[-1] - target) for angles 
 
 plt.figure()
 plt.plot(errors, marker='o')
-plt.title('HPSO Convergence Curve')
+plt.title('PSO Convergence Curve')
 plt.xlabel('Iteration')
 plt.ylabel('Error (Distance to Target)')
 plt.grid(True)
@@ -144,3 +144,6 @@ ani = FuncAnimation(fig, update, frames=max_frames, init_func=init,
 
 plt.legend()
 plt.show()
+
+rel_error = pso_error / np.linalg.norm(target)
+print(f"상대 오차율: {rel_error:.3%}")
