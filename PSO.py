@@ -1,3 +1,5 @@
+//pso는 그냥 기본 pso 쓰기로 했고, hpso는 2차 꺼 쓸듯
+
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
