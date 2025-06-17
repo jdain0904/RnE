@@ -1,7 +1,3 @@
-# ==========================================
-# 정식 PSO 기반 4자유도 로봇팔 경로 계획 및 애니메이션 시각화
-# ==========================================
-
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
@@ -14,6 +10,7 @@ from matplotlib.animation import FuncAnimation
 DOF = 4
 joint_bounds = [(-np.pi/2, np.pi/2) for _ in range(DOF)]
 link_lengths = [0.3, 0.3, 0.2, 0.1]
+
 np.random.seed(42)
 
 def forward_kinematics_3d(joint_angles):
@@ -41,71 +38,78 @@ def random_reachable_target(radius=0.9, z_min=-0.1, z_max=0.5):
             return point
 
 # ==========================================
-# [2] 정식 PSO 알고리즘 구현
+# [2] 직접 구현한 HPSO 알고리즘
 # ==========================================
 
-def pso_inverse_kinematics_with_frames(target, pop_size=20, max_iter=50, w=0.5, c1=1.5, c2=1.5):
+def hpso_inverse_kinematics_with_frames(target, pop_size=10, max_iter=200, w=0.5, c1=1.5, c2=1.5):
     gbest_history = []
 
-    particles = []
-    for _ in range(pop_size):
-        position = np.array([np.random.uniform(low, high) for (low, high) in joint_bounds])
-        velocity = np.zeros(DOF)
-        fitness = np.linalg.norm(forward_kinematics_3d(position)[-1] - target)
-        particle = {
-            "position": position,
-            "velocity": velocity,
-            "pbest_pos": position.copy(),
-            "pbest_val": fitness
+    particles = [
+        {
+            "position": np.random.uniform(low, high, pop_size),
+            "velocity": np.zeros(pop_size),
+            "pbest_pos": None,
+            "pbest_val": np.inf
         }
-        particles.append(particle)
+        for (low, high) in joint_bounds
+    ]
 
-    gbest = min(particles, key=lambda p: p["pbest_val"])
-    gbest_pos = gbest["pbest_pos"].copy()
-    gbest_val = gbest["pbest_val"]
+    for particle in particles:
+        particle["pbest_pos"] = np.copy(particle["position"])
+
+    def evaluate(angles_group):
+        configs = np.stack(angles_group, axis=1)
+        fitnesses = np.linalg.norm(forward_kinematics_3d(configs.T)[-1] - target, axis=-1)
+        return fitnesses
 
     for iter in range(max_iter):
-        for p in particles:
-            fitness = np.linalg.norm(forward_kinematics_3d(p["position"])[-1] - target)
-            if fitness < p["pbest_val"]:
-                p["pbest_val"] = fitness
-                p["pbest_pos"] = p["position"].copy()
-            if fitness < gbest_val:
-                gbest_val = fitness
-                gbest_pos = p["position"].copy()
+        angles_group = [p["position"] for p in particles]
+        fitnesses = []
+        for i in range(pop_size):
+            config = np.array([p["position"][i] for p in particles])
+            end = forward_kinematics_3d(config)[-1]
+            error = np.linalg.norm(end - target)
+            fitnesses.append(error)
+            for j, p in enumerate(particles):
+                if error < p["pbest_val"]:
+                    p["pbest_val"] = error
+                    p["pbest_pos"][i] = p["position"][i]
 
-        gbest_history.append(gbest_pos.copy())
+        best_idx = np.argmin(fitnesses)
+        best_angles = np.array([p["position"][best_idx] for p in particles])
+        gbest_history.append(best_angles)
 
-        for p in particles:
-            r1, r2 = np.random.rand(DOF), np.random.rand(DOF)
+        for i, p in enumerate(particles):
+            r1, r2 = np.random.rand(pop_size), np.random.rand(pop_size)
             cognitive = c1 * r1 * (p["pbest_pos"] - p["position"])
-            social = c2 * r2 * (gbest_pos - p["position"])
+            social = c2 * r2 * (particles[i]["pbest_pos"][best_idx] - p["position"])
             p["velocity"] = w * p["velocity"] + cognitive + social
             p["position"] += p["velocity"]
-            for i in range(DOF):
-                p["position"][i] = np.clip(p["position"][i], joint_bounds[i][0], joint_bounds[i][1])
+            p["position"] = np.clip(p["position"], joint_bounds[i][0], joint_bounds[i][1])
 
-    return gbest_pos, gbest_val, gbest_history
+    final_angles = gbest_history[-1]
+    final_error = np.linalg.norm(forward_kinematics_3d(final_angles)[-1] - target)
+    return final_angles, final_error, gbest_history
 
 # ==========================================
 # [3] 실행 및 결과 준비 + 수렴곡선 시각화
 # ==========================================
 
 target = random_reachable_target()
-pso_angles, pso_error, gbest_frames = pso_inverse_kinematics_with_frames(target)
+pso_angles, pso_error, gbest_frames = hpso_inverse_kinematics_with_frames(target)
 
 errors = [np.linalg.norm(forward_kinematics_3d(angles)[-1] - target) for angles in gbest_frames]
 
 plt.figure()
 plt.plot(errors, marker='o')
-plt.title('PSO Convergence Curve')
+plt.title('HPSO Convergence Curve')
 plt.xlabel('Iteration')
 plt.ylabel('Error (Distance to Target)')
 plt.grid(True)
 plt.show()
 
 pso_coords_seq = [forward_kinematics_3d(angles) for angles in gbest_frames]
-max_frames = len(gbest_frames)
+max_frames = 200
 
 # ==========================================
 # [4] 3D 애니메이션 시각화
@@ -116,9 +120,9 @@ ax = fig.add_subplot(111, projection='3d')
 ax.set_xlim([-1, 1])
 ax.set_ylim([-1, 1])
 ax.set_zlim([-1, 1])
-ax.set_title("PSO-based 4DOF Robot Arm Optimization")
+ax.set_title("HPSO-based 4DOF Robot Arm Optimization")
 target_point = ax.scatter(*target, color='red', label='Target')
-line_pso, = ax.plot([], [], [], '-o', color='green', label='PSO')
+line_pso, = ax.plot([], [], [], '-o', color='green', label='HPSO')
 frame_text = ax.text2D(0.05, 0.95, '', transform=ax.transAxes)
 
 def init():
@@ -140,6 +144,3 @@ ani = FuncAnimation(fig, update, frames=max_frames, init_func=init,
 
 plt.legend()
 plt.show()
-rel_error = pso_error / np.linalg.norm(target)
-print(f"절대 오차 (m): {pso_error:.20f} m")
-print(f"상대 오차율: {rel_error:.10%}")
