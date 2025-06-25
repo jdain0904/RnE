@@ -101,7 +101,7 @@ def visualize_full_results(target, current_best_angles, history, fitness_history
     plt.tight_layout()
     plt.show()
 
-def hierarchical_pso(target, master_pop_size=15, sub_pop_size=8, max_iterations=200, w=0.5, c1=1.5, c2=1.5):
+def hierarchical_pso(target, master_pop_size=15, sub_pop_size=8, max_iterations=150, w=0.5, c1=1.5, c2=1.5):
     master_swarm = []
     for i in range(master_pop_size):
         position = np.array([np.random.uniform(*joint_bounds[j]) for j in range(DOF)])
@@ -126,6 +126,7 @@ def hierarchical_pso(target, master_pop_size=15, sub_pop_size=8, max_iterations=
     print(f"총 iteration 횟수: {max_iterations}")
     print(f"\n--- 초기 상태 (0회 iteration) ---")
     visualize_3d_only(target, gbest_position, optimization_history, 0, gbest_fitness, total_evaluations)
+    
     for iteration in range(1, max_iterations + 1):
         iteration_evaluations = 0
         for master_idx, master_particle in enumerate(master_swarm):
@@ -149,8 +150,10 @@ def hierarchical_pso(target, master_pop_size=15, sub_pop_size=8, max_iterations=
                 master_particle['pbest_fitness'] = sub_best_fitness
                 master_particle['pbest_position'] = sub_best_position.copy()
                 master_particle['position'] = sub_best_position.copy()
+        
         optimization_history.append(gbest_position.copy())
         fitness_history.append(gbest_fitness)
+        
         for master_particle in master_swarm:
             r1, r2 = np.random.rand(2)
             cognitive = c1 * r1 * (master_particle['pbest_position'] - master_particle['position'])
@@ -159,6 +162,7 @@ def hierarchical_pso(target, master_pop_size=15, sub_pop_size=8, max_iterations=
             master_particle['position'] += master_particle['velocity']
             for i in range(DOF):
                 master_particle['position'][i] = np.clip(master_particle['position'][i], *joint_bounds[i])
+        
         for master_particle in master_swarm:
             update_sub_swarm_positions(master_particle['sub_swarm'], gbest_position)
             update_sub_swarm_with_master_info(
@@ -166,19 +170,20 @@ def hierarchical_pso(target, master_pop_size=15, sub_pop_size=8, max_iterations=
                 master_particle['position'],
                 gbest_position
             )
+        
         if iteration % 50 == 0:
             print(f"\n--- {iteration}회 iteration 완료 ---")
             print(f"이번 iteration 평가 횟수: {iteration_evaluations}")
             print(f"총 평가 횟수: {total_evaluations}")
             print(f"현재 최적 적합도: {gbest_fitness:.8f}")
             visualize_3d_only(target, gbest_position, optimization_history, iteration, gbest_fitness, total_evaluations)
-   """조기종료조건 : 지금은 반복횟수 200으로 고정시키고 하는것이니 주석처리함
-        if gbest_fitness < 1e-10: 
-            print(f"목표 정확도 달성! (iteration {iteration}, 총 평가 {total_evaluations}회)")
-            break
-        """
-	
-	print(f"\n최종 통계: {iteration} iterations, {total_evaluations} total evaluations")
+    
+    # 조기종료조건 : 지금은 반복횟수 150으로 고정시키고 하는것이니 주석처리함
+    # if gbest_fitness < 1e-10: 
+    #     print(f"목표 정확도 달성! (iteration {iteration}, 총 평가 {total_evaluations}회)")
+    #     break
+    
+    print(f"\n최종 통계: {iteration} iterations, {total_evaluations} total evaluations")
     return gbest_position, gbest_fitness, optimization_history, fitness_history, total_evaluations
 
 def initialize_sub_swarm(master_position, sub_pop_size):
@@ -222,7 +227,7 @@ def update_sub_swarm_with_master_info(sub_swarm, new_master_position, global_bes
 def run_hierarchical_pso():
     target = random_reachable_target()
     print(f"목표 위치: {target}")
-    final_angles, final_error, history, fitness_history, total_evaluations = hierarchical_pso(target, max_iterations=200)
+    final_angles, final_error, history, fitness_history, total_evaluations = hierarchical_pso(target, max_iterations=150)
     print(f"\n=== 최종 결과 ===")
     print(f"최종 관절 각도: {final_angles}")
     print(f"최종 오차: {final_error:.10f} m")
