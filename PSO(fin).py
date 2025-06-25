@@ -262,8 +262,7 @@ def run_standard_pso():
 if __name__ == "__main__":
     final_angles, final_error, history, fitness_history, total_evaluations = run_standard_pso()
     
-    # 최종 통계
-    target = random_reachable_target()  # 동일한 시드로 같은 타겟 생성
+    target = random_reachable_target()
     print(f"\n=== 최종 통계 ===")
     print(f"총 iteration 횟수: {len(history)}")
     print(f"총 입자 평가 횟수: {total_evaluations}")
@@ -271,7 +270,4 @@ if __name__ == "__main__":
     print(f"상대 오차 (목표거리 대비): {final_error/np.linalg.norm(target)*100:.6f}%")
     print(f"최종 엔드이펙터 위치: {forward_kinematics_3d(final_angles)[-1]}")
     print(f"목표 위치: {target}")
-    print(f"\n=== PSO → HPSO 공정한 비교 ===")
-    print(f"PSO: 120개 입자 × 150회 = {total_evaluations}회 평가")
-    print(f"HPSO: 120개 입자 × 150회 = 18,000회 평가")
-    print(f"→ 동일한 계산 비용으로 순수 알고리즘 성능 비교 가능")
+    print(f"효율성: {len(history)}회 iteration으로 {total_evaluations}회 입자 평가 완료")
