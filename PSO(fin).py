@@ -243,8 +243,8 @@ def run_standard_pso():
     target = random_reachable_target()
     print(f"목표 위치: {target}")
     
-    # 표준 PSO 실행 (200회 iteration)
-    final_angles, final_error, history, fitness_history, total_evaluations = standard_pso(target, max_iterations=200)
+    # 표준 PSO 실행 (150회 iteration)
+    final_angles, final_error, history, fitness_history, total_evaluations = standard_pso(target, max_iterations=150)
     
     print(f"\n=== 최종 결과 ===")
     print(f"최종 관절 각도: {final_angles}")
@@ -272,8 +272,3 @@ if __name__ == "__main__":
     print(f"최종 엔드이펙터 위치: {forward_kinematics_3d(final_angles)[-1]}")
     print(f"목표 위치: {target}")
     print(f"효율성: {len(history)}회 iteration으로 {total_evaluations}회 입자 평가 완료")
-    
-    print(f"\n=== PSO → HPSO 발전 과정 ===")
-    print(f"현재 PSO: 단일 스웜 {30}개 입자")
-    print(f"→ HPSO로 발전: 마스터 스웜 {15}개 + 각각 서브 스웜 {8}개")
-    print(f"구조적 연결점: 둘 다 각 입자가 전체 관절각 벡터를 가짐")
