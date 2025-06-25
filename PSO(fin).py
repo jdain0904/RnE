@@ -142,7 +142,7 @@ def visualize_full_results(target, current_best_angles, history, fitness_history
 # [2] 표준 PSO 알고리즘 (HPSO 연결용)
 # ==========================================
 
-def standard_pso(target, pop_size=30, max_iterations=150, w=0.5, c1=1.5, c2=1.5):
+def standard_pso(target, pop_size=120, max_iterations=150, w=0.5, c1=1.5, c2=1.5):
     """
     표준 PSO 알고리즘 - 우리 HPSO와 연결되는 구조
     각 입자가 전체 관절각 벡터를 가짐 (HPSO의 마스터 입자와 동일한 구조)
@@ -271,4 +271,7 @@ if __name__ == "__main__":
     print(f"상대 오차 (목표거리 대비): {final_error/np.linalg.norm(target)*100:.6f}%")
     print(f"최종 엔드이펙터 위치: {forward_kinematics_3d(final_angles)[-1]}")
     print(f"목표 위치: {target}")
-    print(f"효율성: {len(history)}회 iteration으로 {total_evaluations}회 입자 평가 완료")
+    print(f"\n=== PSO → HPSO 공정한 비교 ===")
+    print(f"PSO: 120개 입자 × 150회 = {total_evaluations}회 평가")
+    print(f"HPSO: 120개 입자 × 150회 = 18,000회 평가")
+    print(f"→ 동일한 계산 비용으로 순수 알고리즘 성능 비교 가능")
