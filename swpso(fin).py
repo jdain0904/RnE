@@ -102,13 +102,13 @@ def visualize_full_results(target, current_best_angles, history, fitness_history
     plt.show()
 
 # ==============================
-# PSO + Sliding Window 알고리즘 (진짜 시간 변화 적용)
+# PSO + Sliding Window 알고리즘 (고정 목표)
 # ==============================
 
-def pso_sliding_window(target_function, pop_size=120, max_iterations=150, window_size=30, slide_step=15, w=0.5, c1=1.5, c2=1.5):
+def pso_sliding_window(target, pop_size=120, max_iterations=150, window_size=30, slide_step=15, w=0.5, c1=1.5, c2=1.5):
     """
-    진짜 PSO + Sliding Window 알고리즘
-    시간에 따라 변하는 목표나 제약을 처리 (정확히 150회 iteration)
+    PSO + Sliding Window 알고리즘
+    고정된 목표에 대해 윈도우 기반 PSO 적용 (정확히 150회 iteration)
     """
     
     # 전체 기록용
@@ -121,13 +121,14 @@ def pso_sliding_window(target_function, pop_size=120, max_iterations=150, window
     print(f"입자 개수: {pop_size}")
     print(f"총 iteration 횟수: {max_iterations}")
     print(f"윈도우 크기: {window_size}, 슬라이딩 스텝: {slide_step}")
+    print(f"고정 목표 위치: {target}")
     
     # 초기 상태
     gbest_position = np.array([np.random.uniform(*joint_bounds[j]) for j in range(DOF)])
     gbest_fitness = np.inf
     
     print(f"\n--- 초기 상태 (0회 iteration) ---")
-    visualize_3d_only(target_function(0), gbest_position, optimization_history, 0, gbest_fitness, total_evaluations)
+    visualize_3d_only(target, gbest_position, optimization_history, 0, gbest_fitness, total_evaluations)
     
     # 윈도우별 최적해 저장
     window_best_positions = []
@@ -175,14 +176,12 @@ def pso_sliding_window(target_function, pop_size=120, max_iterations=150, window
         for window_iter in range(window_iterations):
             if current_iteration >= max_iterations:
                 break
-                
-            current_target = target_function(current_iteration)  # 시간 변화하는 목표
             
-            # 모든 입자 평가
+            # 모든 입자 평가 (고정된 목표에 대해)
             for particle in swarm:
-                # 적합도 계산 (시간 변화하는 목표에 대해)
+                # 적합도 계산
                 end_effector = forward_kinematics_3d(particle['position'])[-1]
-                fitness = np.linalg.norm(end_effector - current_target)
+                fitness = np.linalg.norm(end_effector - target)  # 고정된 목표 사용
                 total_evaluations += 1
                 
                 # 개인 최적해 업데이트
@@ -200,7 +199,7 @@ def pso_sliding_window(target_function, pop_size=120, max_iterations=150, window
                     gbest_fitness = fitness
                     gbest_position = particle['position'].copy()
             
-            # 전체 기록 (현재 시간 기준)
+            # 전체 기록
             optimization_history.append(gbest_position.copy())
             fitness_history.append(gbest_fitness)
             current_iteration += 1
@@ -227,7 +226,7 @@ def pso_sliding_window(target_function, pop_size=120, max_iterations=150, window
                 print(f"현재 윈도우: {window_start}-{min(window_start + window_size, max_iterations)}")
                 print(f"총 평가 횟수: {total_evaluations}")
                 print(f"현재 최적 적합도: {gbest_fitness:.8f}")
-                visualize_3d_only(current_target, gbest_position, optimization_history, current_iteration, gbest_fitness, total_evaluations)
+                visualize_3d_only(target, gbest_position, optimization_history, current_iteration, gbest_fitness, total_evaluations)
             
             if current_iteration >= max_iterations:
                 break
@@ -241,24 +240,15 @@ def pso_sliding_window(target_function, pop_size=120, max_iterations=150, window
     return gbest_position, gbest_fitness, optimization_history, fitness_history, total_evaluations
 
 def run_pso_sliding_window():
-    # 시간에 따라 변하는 목표 함수 정의
-    base_target = random_reachable_target()
+    # 고정된 목표 설정
+    target = random_reachable_target()
     
-    def time_varying_target(time_step):
-        """시간에 따라 조금씩 변하는 목표"""
-        # 기본 목표에서 시간에 따라 작은 변화 추가
-        variation = 0.05 * np.sin(time_step * 0.1) * np.array([1, 0.5, 0.3])
-        new_target = base_target + variation
-        # 경계 내로 제한
-        new_target = np.clip(new_target, [-0.9, -0.9, -0.1], [0.9, 0.9, 0.5])
-        return new_target
-    
-    print(f"기준 목표 위치: {base_target}")
-    print("시간에 따라 목표가 미세하게 변화합니다...")
+    print(f"고정 목표 위치: {target}")
+    print("목표는 전체 과정 동안 고정됩니다.")
     
     # PSO + Sliding Window 실행
     final_angles, final_error, history, fitness_history, total_evaluations = pso_sliding_window(
-        time_varying_target, max_iterations=150
+        target, max_iterations=150
     )
     
     print(f"\n=== 최종 결과 ===")
@@ -269,8 +259,7 @@ def run_pso_sliding_window():
     
     # 최종 전체 결과 시각화
     print(f"\n--- 최종 전체 결과 시각화 ---")
-    final_target = time_varying_target(len(history) - 1)
-    visualize_full_results(final_target, final_angles, history, fitness_history, len(history), final_error, total_evaluations)
+    visualize_full_results(target, final_angles, history, fitness_history, len(history), final_error, total_evaluations)
     
     return final_angles, final_error, history, fitness_history, total_evaluations
 
@@ -278,16 +267,17 @@ if __name__ == "__main__":
     final_angles, final_error, history, fitness_history, total_evaluations = run_pso_sliding_window()
     
     # 최종 통계
-    base_target = random_reachable_target()  # 동일한 시드로 기준 타겟 생성
+    target = random_reachable_target()  # 동일한 시드로 기준 타겟 생성
     print(f"\n=== 최종 통계 ===")
     print(f"총 iteration 횟수: {len(history)}")
     print(f"총 입자 평가 횟수: {total_evaluations}")
     print(f"평가/iteration 비율: {total_evaluations/len(history):.1f}")
-    print(f"상대 오차 (목표거리 대비): {final_error/np.linalg.norm(base_target)*100:.6f}%")
+    print(f"상대 오차 (목표거리 대비): {final_error/np.linalg.norm(target)*100:.6f}%")
     print(f"최종 엔드이펙터 위치: {forward_kinematics_3d(final_angles)[-1]}")
-    print(f"기준 목표 위치: {base_target}")
+    print(f"목표 위치: {target}")
     print(f"효율성: {len(history)}회 iteration으로 {total_evaluations}회 입자 평가 완료")
     print(f"\n=== PSO + Sliding Window 특징 ===")
-    print(f"시간 변화 대응: 목표가 시간에 따라 변화하는 동적 환경")
+    print(f"입자 개수: {120}개 (HPSO보다 단순한 구조)")
+    print(f"고정 목표: 목표는 처음부터 끝까지 동일한 위치 유지")
     print(f"윈도우 기반 적응: 이전 경험을 활용한 지속적 학습")
     print(f"슬라이딩 메커니즘: 15스텝마다 30크기 윈도우로 슬라이딩")
