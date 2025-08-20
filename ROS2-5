@@ -1,0 +1,26 @@
+mkdir -p ~/ros2_ws/src/hpso_ik/launch
+cat > ~/ros2_ws/src/hpso_ik/launch/hpso_demo.launch.py <<'PY'
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    return LaunchDescription([
+        Node(
+            package='hpso_ik',
+            executable='hpso_node',
+            name='hpso_node',
+            output='screen',
+            parameters=[{
+                'dof': 4,
+                'link_lengths': [0.3, 0.3, 0.2, 0.1],
+                'joint_low':  [-1.5708, -1.5708, -1.5708, -1.5708],
+                'joint_high': [ 1.5708,  1.5708,  1.5708,  1.5708],
+                'pop_size': 20,
+                'max_iter': 200,
+                'w': 0.5, 'c1': 1.5, 'c2': 1.5, 'hc': 0.5, 'levels': 3,
+                'seed': 42,
+                'fixed_frame': 'map'
+            }]
+        ),
+    ])
+PY
