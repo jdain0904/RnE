@@ -1,0 +1,12 @@
+applypatch () { ed -s "$1" <<'ED'
+/entry_points=/,/}/-1c
+    entry_points={
+        'console_scripts': [
+            'hpso_node = hpso_ik.hpso_node:main',
+        ],
+    },
+.
+wq
+ED
+}
+applypatch ~/ros2_ws/src/hpso_ik/setup.py
