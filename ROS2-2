@@ -1,0 +1,103 @@
+cat > ~/ros2_ws/src/hpso_ik/hpso_ik/algos.py <<'PY'
+import numpy as np
+import math
+
+def forward_kinematics_3d(joint_angles, link_lengths):
+    coords = [(0.0, 0.0, 0.0)]
+    x = y = z = 0.0
+    theta_y = theta_z = 0.0
+    for i, (angle, length) in enumerate(zip(joint_angles, link_lengths)):
+        if i % 2 == 0:
+            theta_y += angle
+        else:
+            theta_z += angle
+        dx = length * np.cos(theta_y) * np.cos(theta_z)
+        dy = length * np.sin(theta_y)
+        dz = length * np.cos(theta_y) * np.sin(theta_z)
+        x += dx; y += dy; z += dz
+        coords.append((x, y, z))
+    return np.array(coords)
+
+def hpso_inverse_kinematics(
+    target, joint_bounds, link_lengths,
+    pop_size=20, max_iter=200, w=0.5, c1=1.5, c2=1.5, hc=0.5, levels=3, seed=42
+):
+    if seed is not None:
+        np.random.seed(int(seed))
+
+    DOF = len(joint_bounds)
+    particles_per_level = max(1, pop_size // max(1, levels))
+    hierarchical_particles = []
+    # 계층별 파티클 초기화
+    for level in range(levels):
+        level_particles = []
+        for j in range(DOF):
+            low, high = joint_bounds[j]
+            exploration = 1.0 - (level / levels) * 0.5
+            joint_pos = np.random.uniform(low*exploration, high*exploration, particles_per_level)
+            particle = dict(
+                position=joint_pos,
+                velocity=np.zeros(particles_per_level),
+                pbest_pos=joint_pos.copy(),
+                pbest_val=np.full(particles_per_level, np.inf),
+                parent=None, children=[]
+            )
+            level_particles.append(particle)
+        hierarchical_particles.append(level_particles)
+
+    # 계층 연결
+    for level in range(levels - 1):
+        for j in range(DOF):
+            parent = hierarchical_particles[level][j]
+            child  = hierarchical_particles[level + 1][j]
+            parent["children"].append(child)
+            child["parent"] = parent
+
+    def evaluate(config):
+        end = forward_kinematics_3d(config, link_lengths)[-1]
+        return np.linalg.norm(end - target)
+
+    gbest_history = []
+    best_angles = None
+    best_error = np.inf
+
+    for _it in range(max_iter):
+        for level in range(levels):
+            for i in range(particles_per_level):
+                config = np.array([hierarchical_particles[level][j]["position"][i] for j in range(DOF)])
+                err = evaluate(config)
+                for j in range(DOF):
+                    pj = hierarchical_particles[level][j]
+                    if err < pj["pbest_val"][i]:
+                        pj["pbest_val"][i] = err
+                        pj["pbest_pos"][i] = pj["position"][i]
+                if err < best_error:
+                    best_error = err
+                    best_angles = config
+        if best_angles is not None:
+            gbest_history.append(best_angles.copy())
+
+        # 업데이트
+        for level in range(levels):
+            for j in range(DOF):
+                node = hierarchical_particles[level][j]
+                r1 = np.random.rand(particles_per_level)
+                r2 = np.random.rand(particles_per_level)
+                r3 = np.random.rand(particles_per_level)
+                pbest_term = c1 * r1 * (node["pbest_pos"] - node["position"])
+                gbest_term = c2 * r2 * ((best_angles[j] if best_angles is not None else 0.0) - node["position"])
+                hierarchy_term = np.zeros(particles_per_level)
+                if node["parent"] is not None:
+                    hierarchy_term += hc * r3 * (node["parent"]["pbest_pos"] - node["position"])
+                if node["children"]:
+                    children_avg = np.mean([ch["pbest_pos"] for ch in node["children"]], axis=0)
+                    hierarchy_term += 0.5 * hc * r3 * (children_avg - node["position"])
+                node["velocity"] = w * node["velocity"] + pbest_term + gbest_term + hierarchy_term
+                node["position"] += node["velocity"]
+                low, high = joint_bounds[j]
+                node["position"] = np.clip(node["position"], low, high)
+
+    final_angles = gbest_history[-1] if gbest_history else np.zeros(len(joint_bounds))
+    final_error  = best_error
+    return final_angles, final_error, gbest_history
+PY
