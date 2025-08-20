@@ -1,0 +1,97 @@
+cat > ~/ros2_ws/src/hpso_ik/hpso_ik/hpso_node.py <<'PY'
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Point
+from sensor_msgs.msg import JointState
+from visualization_msgs.msg import Marker
+from builtin_interfaces.msg import Duration
+import numpy as np
+
+from hpso_ik.algos import hpso_inverse_kinematics, forward_kinematics_3d
+
+class HpsoNode(Node):
+    def __init__(self):
+        super().__init__('hpso_node')
+
+        # 파라미터(필요시 런치에서 수정)
+        self.declare_parameter('dof', 4)
+        self.declare_parameter('link_lengths', [0.3, 0.3, 0.2, 0.1])
+        self.declare_parameter('joint_low',  [-1.5708]*4)   # -pi/2
+        self.declare_parameter('joint_high', [ 1.5708]*4)   #  pi/2
+        self.declare_parameter('pop_size', 20)
+        self.declare_parameter('max_iter', 200)
+        self.declare_parameter('w', 0.5)
+        self.declare_parameter('c1', 1.5)
+        self.declare_parameter('c2', 1.5)
+        self.declare_parameter('hc', 0.5)
+        self.declare_parameter('levels', 3)
+        self.declare_parameter('seed', 42)
+        self.declare_parameter('fixed_frame', 'map')   # RViz 고정 프레임
+
+        self.dof = int(self.get_parameter('dof').value)
+        self.link_lengths = list(self.get_parameter('link_lengths').value)
+        lows  = list(self.get_parameter('joint_low').value)
+        highs = list(self.get_parameter('joint_high').value)
+        self.joint_bounds = list(zip(lows, highs))
+        self.fixed_frame = str(self.get_parameter('fixed_frame').value)
+
+        # 통신 설정
+        self.sub_target = self.create_subscription(Point, 'target', self.on_target, 10)
+        self.pub_js     = self.create_publisher(JointState, 'joint_solution', 10)
+        self.pub_marker = self.create_publisher(Marker, 'ee_marker', 10)
+
+        self.get_logger().info('HPSO IK node ready. Publish geometry_msgs/Point on /target')
+
+    def on_target(self, msg: Point):
+        # 입력: Point -> numpy
+        target = np.array([msg.x, msg.y, msg.z], dtype=float)
+        self.get_logger().info(f'Target received: {target}')
+
+        # 최적화 실행(알고리즘은 그대로)
+        q, err, _ = hpso_inverse_kinematics(
+            target=target,
+            joint_bounds=self.joint_bounds,
+            link_lengths=self.link_lengths,
+            pop_size=int(self.get_parameter('pop_size').value),
+            max_iter=int(self.get_parameter('max_iter').value),
+            w=float(self.get_parameter('w').value),
+            c1=float(self.get_parameter('c1').value),
+            c2=float(self.get_parameter('c2').value),
+            hc=float(self.get_parameter('hc').value),
+            levels=int(self.get_parameter('levels').value),
+            seed=int(self.get_parameter('seed').value)
+        )
+
+        # 출력1: JointState
+        js = JointState()
+        js.name = [f'joint_{i+1}' for i in range(self.dof)]
+        js.position = [float(a) for a in q]
+        self.pub_js.publish(js)
+
+        # 출력2: RViz Marker (말단 위치)
+        ee = forward_kinematics_3d(q, self.link_lengths)[-1]
+        mk = Marker()
+        mk.header.frame_id = self.fixed_frame
+        mk.ns = 'hpso_ik'
+        mk.id = 1
+        mk.type = Marker.SPHERE
+        mk.action = Marker.ADD
+        mk.pose.position.x = float(ee[0])
+        mk.pose.position.y = float(ee[1])
+        mk.pose.position.z = float(ee[2])
+        mk.scale.x = mk.scale.y = mk.scale.z = 0.03
+        mk.color.r = 0.0; mk.color.g = 1.0; mk.color.b = 0.0; mk.color.a = 1.0
+        mk.lifetime = Duration(sec=0, nanosec=0)
+        self.pub_marker.publish(mk)
+
+        self.get_logger().info(f'Solved   err={err:.4f}')
+        self.get_logger().info(f'Angles  q={np.array2string(q, precision=3)}')
+        self.get_logger().info(f'End-Eff ee={np.array2string(ee, precision=3)}')
+
+def main():
+    rclpy.init()
+    node = HpsoNode()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+PY
