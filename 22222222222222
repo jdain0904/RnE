@@ -1,0 +1,33 @@
+python3 - <<'PY'
+from pathlib import Path
+p = Path('~/ros2_ws/src/hpso_ik/setup.py').expanduser()
+t = p.read_text()
+
+# 1) find_packages: hpso_ik만 설치 대상으로
+if "find_packages(" not in t:
+    from re import sub
+t = t.replace("find_packages()", "find_packages(include=['hpso_ik','hpso_ik.*'])")
+
+# 2) data_files에 ament index 등록 + launch/urdf/config 포함
+if "ament_index/resource_index/packages" not in t or "resource/hpso_ik" not in t:
+    # 표준 템플릿으로 교체/삽입
+    import re
+    t = re.sub(r"data_files=\[[\s\S]*?\],", 
+f"""data_files=[
+        ('share/ament_index/resource_index/packages', ['resource/hpso_ik']),
+        ('share/hpso_ik', ['package.xml']),
+        ('share/hpso_ik/launch', ['launch/gazebo_arm.launch.py','launch/hpso_svm.launch.py']),
+        ('share/hpso_ik/urdf', ['urdf/fourdof_arm.urdf']),
+        ('share/hpso_ik/config', ['config/controllers.yaml']),
+    ],""", t)
+
+# 3) entry_points에 실행 엔트리 추가
+if "hpso_svm_node = hpso_ik.hpso_svm_node:main" not in t:
+    t = t.replace(
+        "'console_scripts': [",
+        "'console_scripts': [\n            'hpso_svm_node = hpso_ik.hpso_svm_node:main',"
+    )
+
+p.write_text(t)
+print("setup.py patched ✅")
+PY
