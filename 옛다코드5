@@ -1,0 +1,10 @@
+python3 - <<'PY'
+from pathlib import Path
+p=Path('~/ros2_ws/src/hpso_ik/setup.py').expanduser()
+t=p.read_text()
+if 'hpso_svm_node' not in t:
+    t=t.replace("entry_points={\n        'console_scripts': [",
+                "entry_points={\n        'console_scripts': [\n            'hpso_svm_node = hpso_ik.hpso_svm_node:main',")
+    p.write_text(t)
+print('setup.py updated for hpso_svm_node')
+PY
