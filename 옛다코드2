@@ -1,0 +1,208 @@
+cat > ~/ros2_ws/src/hpso_ik/hpso_ik/algos_svm.py <<'PY'
+import numpy as np
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC, LinearSVC, OneClassSVM
+from sklearn.calibration import CalibratedClassifierCV
+
+DOF = 4
+link_lengths = [0.3, 0.3, 0.2, 0.1]
+joint_bounds = [(-np.pi/2, np.pi/2) for _ in range(DOF)]
+
+def forward_kinematics_3d(joint_angles):
+    coords = [(0.0, 0.0, 0.0)]
+    x = y = z = 0.0
+    theta_y = theta_z = 0.0
+    for i, (angle, length) in enumerate(zip(joint_angles, link_lengths)):
+        if i % 2 == 0: theta_y += angle
+        else:          theta_z += angle
+        dx = length * np.cos(theta_y) * np.cos(theta_z)
+        dy = length * np.sin(theta_y)
+        dz = length * np.cos(theta_y) * np.sin(theta_z)
+        x += dx; y += dy; z += dz
+        coords.append((x, y, z))
+    return np.array(coords)
+
+def build_judge(kind="svc_rbf", prob=False, **kw):
+    if kind=="svc_rbf":
+        return Pipeline([("scaler", StandardScaler()),
+                         ("clf", SVC(kernel="rbf", class_weight="balanced", probability=prob, **kw))])
+    if kind=="linear_svc":
+        return Pipeline([("scaler", StandardScaler(with_mean=False)), ("clf", LinearSVC(**kw))])
+    if kind=="oneclass":
+        return Pipeline([("scaler", StandardScaler()), ("clf", OneClassSVM(**kw))])
+    raise ValueError("unknown judge kind")
+
+def fit_judge(judge, X, y=None, prob=False, cv=5):
+    if y is None:
+        judge.fit(X); return judge
+    last = judge.named_steps.get("clf")
+    if isinstance(last, LinearSVC) and prob:
+        cal = CalibratedClassifierCV(last, method="sigmoid", cv=cv)
+        return Pipeline([("scaler", judge.named_steps["scaler"]), ("cal", cal)]).fit(X, y)
+    judge.fit(X, y); return judge
+
+def margin_score(judge, X):
+    steps = list(judge.named_steps.values())
+    last = steps[-1]
+    sc = getattr(judge.named_steps, "scaler", None) or judge.named_steps.get("scaler", None)
+    Z = X if sc is None else sc.transform(X)
+    if hasattr(last, "decision_function"):
+        z = last.decision_function(Z)
+        return z if z.ndim==1 else z.max(axis=1)
+    if hasattr(last, "predict_proba"):
+        p = last.predict_proba(Z)[:, -1]
+        return np.log((p+1e-12)/(1-p+1e-12))
+    return judge.predict(Z).astype(float)
+
+def base_cost_wrapper(current_target):
+    def g(Xb):
+        ee = np.array([forward_kinematics_3d(x)[-1] for x in Xb])
+        d = np.linalg.norm(ee - current_target[None, :], axis=1)
+        return float(d.mean())
+    return g
+
+def make_fitness_with_svm(judge, base_cost, target_margin=1.0, w_margin=0.5, reduction="mean"):
+    def f(Xb):
+        m = margin_score(judge, Xb)
+        if reduction=="mean": r = m.mean()
+        elif reduction=="min": r = m.min()
+        else: r = np.quantile(m, float(reduction))
+        pen = max(0.0, target_margin - r)
+        return base_cost(Xb) + w_margin*pen
+    return f
+
+def initialize_sub_swarm(master_position, sub_pop_size):
+    sub_swarm = []
+    noise_range = 0.3
+    for _ in range(sub_pop_size):
+        position = master_position + np.random.uniform(-noise_range, noise_range, DOF)
+        for i in range(DOF):
+            position[i] = np.clip(position[i], *joint_bounds[i])
+        velocity = np.random.uniform(-0.1, 0.1, DOF)
+        sub_swarm.append({'position': position.copy(),
+                          'velocity': velocity.copy(),
+                          'pbest_position': position.copy(),
+                          'pbest_fitness': np.inf})
+    return sub_swarm
+
+def update_sub_swarm_positions(sub_swarm, global_best):
+    for p in sub_swarm:
+        r1, r2, r3 = np.random.rand(3)
+        cognitive = 1.2 * r1 * (p['pbest_position'] - p['position'])
+        global_social = 0.8 * r3 * (global_best - p['position'])
+        p['velocity'] = 0.6 * p.get('velocity', np.zeros(DOF)) + cognitive + global_social
+        p['position'] += p['velocity']
+        for i in range(DOF):
+            p['position'][i] = np.clip(p['position'][i], *joint_bounds[i])
+
+def update_sub_swarm_with_master_info(sub_swarm, new_master_position):
+    num_to_update = len(sub_swarm) // 3
+    for i in range(num_to_update):
+        noise = np.random.uniform(-0.2, 0.2, DOF)
+        cand = new_master_position + noise
+        for j in range(DOF):
+            cand[j] = np.clip(cand[j], *joint_bounds[j])
+        sub_swarm[i]['position'] = cand
+        sub_swarm[i]['velocity'] = np.random.uniform(-0.05, 0.05, DOF)
+
+def train_default_judge():
+    # joint_vectors.npy / labels.npy 있으면 사용, 없으면 OneClass로 임시 학습
+    try:
+        X = np.load("joint_vectors.npy")
+        try: y = np.load("labels.npy")
+        except: y = None
+    except:
+        X = np.array([[np.random.uniform(*joint_bounds[j]) for j in range(DOF)] for _ in range(4000)])
+        y = None
+    if y is None:
+        return fit_judge(build_judge("oneclass", gamma="scale", nu=0.1), X, None)
+    return fit_judge(build_judge("svc_rbf", prob=False, C=1.0, gamma="scale"), X, y, prob=False)
+
+def hpso_sliding_window_with_svm(target_function,
+                                 svm_judge,
+                                 master_pop_size=15, sub_pop_size=8,
+                                 max_iterations=150, window_size=30, slide_step=15,
+                                 w=0.5, c1=1.5, c2=1.5,
+                                 target_margin=1.0, w_margin=0.5, reduction="mean"):
+    gbest_positions_history, gbest_fitness_history, targets_history = [], [], []
+    total_evaluations = 0
+    current_iteration = 0
+    gbest_position = np.array([np.random.uniform(*joint_bounds[j]) for j in range(DOF)])
+    gbest_fitness = np.inf
+    window_best_masters = []
+
+    for window_start in range(0, max_iterations, slide_step):
+        if current_iteration >= max_iterations: break
+        window_end = min(window_start + window_size, max_iterations)
+        window_iterations = min(window_end - window_start, max_iterations - current_iteration)
+
+        master_swarm = []
+        for i in range(master_pop_size):
+            if window_best_masters and i < len(window_best_masters):
+                base = window_best_masters[i % len(window_best_masters)]
+                position = base + np.random.uniform(-0.2, 0.2, DOF)
+            else:
+                position = np.array([np.random.uniform(*joint_bounds[j]) for j in range(DOF)])
+            for j in range(DOF): position[j] = np.clip(position[j], *joint_bounds[j])
+            master_swarm.append({'id': i, 'position': position.copy(), 'velocity': np.zeros(DOF),
+                                 'pbest_position': position.copy(), 'pbest_fitness': np.inf,
+                                 'sub_swarm': initialize_sub_swarm(position, sub_pop_size)})
+
+        window_gbest_position = master_swarm[0]['position'].copy()
+        window_gbest_fitness = np.inf
+
+        for _ in range(window_iterations):
+            if current_iteration >= max_iterations: break
+            current_target = target_function(current_iteration)
+            base_cost = base_cost_wrapper(current_target)
+            fitness_fn = make_fitness_with_svm(svm_judge, base_cost, target_margin, w_margin, reduction)
+
+            for mp in master_swarm:
+                sub_best_pos = None; sub_best_fit = np.inf
+                for sp in mp['sub_swarm']:
+                    ee = forward_kinematics_3d(sp['position'])[-1]
+                    d = np.linalg.norm(ee - current_target)
+                    m = margin_score(svm_judge, np.array([sp['position']]))[0]
+                    pen = max(0.0, target_margin - m)
+                    fitness = d + w_margin*pen
+                    total_evaluations += 1
+                    if fitness < sp['pbest_fitness']:
+                        sp['pbest_fitness'] = fitness
+                        sp['pbest_position'] = sp['position'].copy()
+                    if fitness < sub_best_fit:
+                        sub_best_fit = fitness; sub_best_pos = sp['position'].copy()
+                    if fitness < window_gbest_fitness:
+                        window_gbest_fitness = fitness; window_gbest_position = sp['position'].copy()
+                    if fitness < gbest_fitness:
+                        gbest_fitness = fitness; gbest_position = sp['position'].copy()
+
+                if sub_best_pos is not None and sub_best_fit < mp['pbest_fitness']:
+                    mp['pbest_fitness'] = sub_best_fit
+                    mp['pbest_position'] = sub_best_pos.copy()
+                    mp['position'] = sub_best_pos.copy()
+
+            gbest_positions_history.append(gbest_position.copy())
+            gbest_fitness_history.append(gbest_fitness)
+            targets_history.append(current_target.copy())
+            current_iteration += 1
+
+            for mp in master_swarm:
+                r1, r2 = np.random.rand(2)
+                cognitive = c1 * r1 * (mp['pbest_position'] - mp['position'])
+                social    = c2 * r2 * (window_gbest_position - mp['position'])
+                mp['velocity'] = w * mp['velocity'] + cognitive + social
+                mp['position'] += mp['velocity']
+                for i in range(DOF):
+                    mp['position'][i] = np.clip(mp['position'][i], *joint_bounds[i])
+
+            for mp in master_swarm:
+                update_sub_swarm_positions(mp['sub_swarm'], window_gbest_position)
+                update_sub_swarm_with_master_info(mp['sub_swarm'], mp['position'])
+
+        window_best_masters = [mp['position'].copy() for mp in master_swarm]
+
+    return (gbest_position, gbest_fitness,
+            gbest_positions_history, gbest_fitness_history,
+            targets_history, total_evaluations)
+PY
