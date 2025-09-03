@@ -12,7 +12,7 @@ np.random.seed(42)
 # ==============================
 # 기구학 / 유틸
 # ==============================
-def forward_kinematics_3d(joint_angles):
+def forward_kinematics_3d(joint_angles): #단순한 역기구학 : ros에서 안굴러가면 진짜 역기구학으로 수정해야함
     """아주 단순화한 3D FK: 짝수 index는 y-회전 누적, 홀수 index는 z-회전 누적."""
     coords = [(0, 0, 0)]
     x, y, z = 0.0, 0.0, 0.0
