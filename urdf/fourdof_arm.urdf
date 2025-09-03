@@ -1,0 +1,109 @@
+<?xml version="1.0"?>
+<robot name="fourdof_arm" xmlns:xacro="http://ros.org/wiki/xacro">
+  <!-- inertial helper -->
+  <xacro:macro name="inertial_box" params="mass x y z">
+    <inertial>
+      <mass value="${mass}"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="${mass*(y*y+z*z)/12.0}" ixy="0" ixz="0"
+               iyy="${mass*(x*x+z*z)/12.0}" iyz="0"
+               izz="${mass*(x*x+y*y)/12.0}"/>
+    </inertial>
+  </xacro:macro>
+
+  <link name="base_link">
+    <visual><geometry><box size="0.1 0.1 0.05"/></geometry></visual>
+    <collision><geometry><box size="0.1 0.1 0.05"/></geometry></collision>
+    <xacro:inertial_box mass="1.0" x="0.1" y="0.1" z="0.05"/>
+  </link>
+
+  <!-- Link lengths: 0.3, 0.3, 0.2, 0.1 along X -->
+  <link name="link1">
+    <visual><origin xyz="0.15 0 0"/><geometry><box size="0.3 0.03 0.03"/></geometry></visual>
+    <collision><origin xyz="0.15 0 0"/><geometry><box size="0.3 0.03 0.03"/></geometry></collision>
+    <xacro:inertial_box mass="0.5" x="0.3" y="0.03" z="0.03"/>
+  </link>
+  <link name="link2">
+    <visual><origin xyz="0.15 0 0"/><geometry><box size="0.3 0.03 0.03"/></geometry></visual>
+    <collision><origin xyz="0.15 0 0"/><geometry><box size="0.3 0.03 0.03"/></geometry></collision>
+    <xacro:inertial_box mass="0.4" x="0.3" y="0.03" z="0.03"/>
+  </link>
+  <link name="link3">
+    <visual><origin xyz="0.10 0 0"/><geometry><box size="0.2 0.03 0.03"/></geometry></visual>
+    <collision><origin xyz="0.10 0 0"/><geometry><box size="0.2 0.03 0.03"/></geometry></collision>
+    <xacro:inertial_box mass="0.3" x="0.2" y="0.03" z="0.03"/>
+  </link>
+  <link name="link4">
+    <visual><origin xyz="0.05 0 0"/><geometry><box size="0.1 0.03 0.03"/></geometry></visual>
+    <collision><origin xyz="0.05 0 0"/><geometry><box size="0.1 0.03 0.03"/></geometry></collision>
+    <xacro:inertial_box mass="0.2" x="0.1" y="0.03" z="0.03"/>
+  </link>
+  <link name="ee_link">
+    <visual><geometry><sphere radius="0.02"/></geometry></visual>
+    <collision><geometry><sphere radius="0.02"/></geometry></collision>
+    <xacro:inertial_box mass="0.05" x="0.04" y="0.04" z="0.04"/>
+  </link>
+
+  <!-- 4 revolute joints: alternate Y/Z axes to match your FK simplification -->
+  <joint name="joint1" type="revolute">
+    <parent link="base_link"/><child link="link1"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/> <!-- about Y -->
+    <limit lower="-1.5708" upper="1.5708" effort="10" velocity="2.0"/>
+  </joint>
+
+  <joint name="joint2" type="revolute">
+    <parent link="link1"/><child link="link2"/>
+    <origin xyz="0.3 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/> <!-- about Z -->
+    <limit lower="-1.5708" upper="1.5708" effort="10" velocity="2.0"/>
+  </joint>
+
+  <joint name="joint3" type="revolute">
+    <parent link="link2"/><child link="link3"/>
+    <origin xyz="0.3 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/> <!-- about Y -->
+    <limit lower="-1.5708" upper="1.5708" effort="8" velocity="2.0"/>
+  </joint>
+
+  <joint name="joint4" type="revolute">
+    <parent link="link3"/><child link="link4"/>
+    <origin xyz="0.2 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/> <!-- about Z -->
+    <limit lower="-1.5708" upper="1.5708" effort="6" velocity="2.0"/>
+  </joint>
+
+  <joint name="fixed_ee" type="fixed">
+    <parent link="link4"/><child link="ee_link"/>
+    <origin xyz="0.1 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Gazebo + ros2_control -->
+  <gazebo>
+    <plugin name="gazebo_ros2_control" filename="libgazebo_ros2_control.so">
+      <parameters>$(find-pkg-share hpso_ik)/config/controllers.yaml</parameters>
+    </plugin>
+  </gazebo>
+
+  <!-- transmissions -->
+  <transmission name="tran_joint1">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="joint1"><hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface></joint>
+    <actuator name="motor1"><hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface><mechanicalReduction>1</mechanicalReduction></actuator>
+  </transmission>
+  <transmission name="tran_joint2">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="joint2"><hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface></joint>
+    <actuator name="motor2"><hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface><mechanicalReduction>1</mechanicalReduction></actuator>
+  </transmission>
+  <transmission name="tran_joint3">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="joint3"><hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface></joint>
+    <actuator name="motor3"><hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface><mechanicalReduction>1</mechanicalReduction></actuator>
+  </transmission>
+  <transmission name="tran_joint4">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="joint4"><hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface></joint>
+    <actuator name="motor4"><hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface><mechanicalReduction>1</mechanicalReduction></actuator>
+  </transmission>
+</robot>
