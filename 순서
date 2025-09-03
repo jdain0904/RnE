@@ -1,0 +1,88 @@
+# 준비
+source /opt/ros/humble/setup.bash
+mkdir -p ~/ros2_ws/src && cd ~/ros2_ws/src
+
+# 패키지 생성
+ros2 pkg create --build-type ament_python hpso_ik \
+  --dependencies rclpy geometry_msgs sensor_msgs visualization_msgs \
+               control_msgs trajectory_msgs rclpy_action
+
+# 리소스/초기화 파일
+touch hpso_ik/resource/hpso_ik
+touch hpso_ik/hpso_ik/__init__.py
+
+# (A) 알고리즘 + SVM + HPSO (시각화 제거)
+cat > hpso_ik/hpso_ik/algos_svm.py <<'PY'
+<PUT_ALGOS_SVM_HERE>
+PY
+
+# (B) ROS 노드: IK 계산 + Gazebo 컨트롤러로 trajectory 전송
+cat > hpso_ik/hpso_ik/hpso_svm_node.py <<'PY'
+<PUT_HPSO_SVM_NODE_HERE>
+PY
+
+# (C) 간단 4-DOF URDF (링크길이 0.3,0.3,0.2,0.1)
+mkdir -p hpso_ik/urdf
+cat > hpso_ik/urdf/fourdof_arm.urdf <<'URDF'
+<PUT_URDF_HERE>
+URDF
+
+# (D) ros2_control 컨트롤러 설정
+mkdir -p hpso_ik/config
+cat > hpso_ik/config/controllers.yaml <<'YAML'
+<PUT_CONTROLLERS_YAML_HERE>
+YAML
+
+# (E) Gazebo 스폰 + 컨트롤러 로딩 런치
+mkdir -p hpso_ik/launch
+cat > hpso_ik/launch/gazebo_arm.launch.py <<'PY'
+<PUT_GAZEBO_LAUNCH_HERE>
+PY
+
+# (F) SVM-PSO 노드 런치 (파라미터 주입)
+cat > hpso_ik/launch/hpso_svm.launch.py <<'PY'
+<PUT_SVM_LAUNCH_HERE>
+PY
+
+# (G) setup.py 수정 (entry_points + data_files 등록)
+cat > hpso_ik/setup.py <<'PY'
+<PUT_SETUP_PY_HERE>
+PY
+
+# setup.cfg (표준)
+cat > hpso_ik/setup.cfg <<'CFG'
+[develop]
+script_dir=$base/lib/hpso_ik
+[install]
+install_scripts=$base/lib/hpso_ik
+CFG
+
+# package.xml (필수 exec_depend 확인)
+cat > hpso_ik/package.xml <<'XML'
+<package format="3">
+  <name>hpso_ik</name>
+  <version>0.0.1</version>
+  <description>HPSO+SVM IK demo with Gazebo</description>
+  <maintainer email="you@example.com">you</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+  <exec_depend>control_msgs</exec_depend>
+  <exec_depend>rclpy_action</exec_depend>
+  <exec_depend>gazebo_ros</exec_depend>
+  <exec_depend>ros2_control</exec_depend>
+  <exec_depend>ros2_controllers</exec_depend>
+  <exec_depend>python3-sklearn</exec_depend>
+</package>
+XML
+
+# 빌드
+cd ~/ros2_ws
+rm -rf build install log
+colcon build --symlink-install
+. install/setup.bash
