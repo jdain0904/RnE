@@ -1,29 +1,5 @@
-cat > ~/ros2_ws/src/hpso_ik/package.xml <<'XML'
-<package format="3">
-  <name>hpso_ik</name>
-  <version>0.0.1</version>
-  <description>HPSO+SVM IK demo with Gazebo</description>
-  <maintainer email="you@example.com">you</maintainer>
-  <license>Apache-2.0</license>
-
-  <!-- 파이썬 패키지 -->
-  <buildtool_depend>ament_python</buildtool_depend>
-
-  <!-- 실행 의존성 -->
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>visualization_msgs</exec_depend>
-  <exec_depend>trajectory_msgs</exec_depend>
-  <exec_depend>control_msgs</exec_depend>
-  <exec_depend>rclpy_action</exec_depend>
-  <exec_depend>gazebo_ros</exec_depend>
-  <exec_depend>ros2_control</exec_depend>
-  <exec_depend>ros2_controllers</exec_depend>
-  <exec_depend>python3-sklearn</exec_depend>
-
-  <export>
-    <build_type>ament_python</build_type>
-  </export>
-</package>
-XML
+if [ -f install/hpso_ik/share/ament_index/resource_index/packages/hpso_ik ] && [ ! -f install/share/ament_index/resource_index/packages/hpso_ik ]; then
+  mkdir -p install/share/ament_index/resource_index/packages
+  ln -s ../../hpso_ik/share/ament_index/resource_index/packages/hpso_ik install/share/ament_index/resource_index/packages/hpso_ik
+  echo "Linked hpso_ik into global ament index."
+fi
