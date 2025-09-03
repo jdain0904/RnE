@@ -1,0 +1,15 @@
+mkdir -p ~/ros2_ws/src/hpso_ik/launch
+cat > ~/ros2_ws/src/hpso_ik/launch/hpso_demo.launch.py <<'PY'
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    return LaunchDescription([
+        Node(
+            package='hpso_ik',
+            executable='hpso_node',  # 기본 노드 (있다면)
+            name='hpso_node',
+            output='screen'
+        ),
+    ])
+PY
