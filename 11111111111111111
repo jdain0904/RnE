@@ -1,5 +1,3 @@
-if [ -f install/hpso_ik/share/ament_index/resource_index/packages/hpso_ik ] && [ ! -f install/share/ament_index/resource_index/packages/hpso_ik ]; then
-  mkdir -p install/share/ament_index/resource_index/packages
-  ln -s ../../hpso_ik/share/ament_index/resource_index/packages/hpso_ik install/share/ament_index/resource_index/packages/hpso_ik
-  echo "Linked hpso_ik into global ament index."
-fi
+echo "IDX:"; ls -l install/share/ament_index/resource_index/packages | sed -n '1,5p'
+echo "PREFIX:"; echo "$AMENT_PREFIX_PATH"
+echo "PKGXML:"; grep -n "<name>" src/hpso_ik/package.xml
