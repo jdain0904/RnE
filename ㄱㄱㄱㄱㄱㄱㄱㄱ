@@ -1,0 +1,3 @@
+test -f ~/ros2_ws/src/hpso_ik/hpso_ik/hpso_svm_node.py || echo "hpso_svm_node.py 없음"
+test -f ~/ros2_ws/src/hpso_ik/hpso_ik/algos_svm.py || echo "algos_svm.py 없음"
+test -f ~/ros2_ws/src/hpso_ik/hpso_ik/__init__.py || echo "__init__.py 없음"
