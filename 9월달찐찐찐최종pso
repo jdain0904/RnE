@@ -1,0 +1,340 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ==============================
+# 설정
+# ==============================
+DOF = 4
+link_lengths = [0.3, 0.3, 0.2, 0.1]
+joint_bounds = [(-np.pi/2, np.pi/2) for _ in range(DOF)]
+np.random.seed(42)
+
+# ==============================
+# 기구학 / 유틸
+# ==============================
+def forward_kinematics_3d(joint_angles):
+    """아주 단순화한 3D FK: 짝수 index는 y-회전 누적, 홀수 index는 z-회전 누적."""
+    coords = [(0, 0, 0)]
+    x, y, z = 0.0, 0.0, 0.0
+    theta_y, theta_z = 0.0, 0.0
+    for i, (angle, length) in enumerate(zip(joint_angles, link_lengths)):
+        if i % 2 == 0:
+            theta_y += angle
+        else:
+            theta_z += angle
+        dx = length * np.cos(theta_y) * np.cos(theta_z)
+        dy = length * np.sin(theta_y)
+        dz = length * np.cos(theta_y) * np.sin(theta_z)
+        x += dx; y += dy; z += dz
+        coords.append((x, y, z))
+    return np.array(coords)
+
+def random_reachable_target(radius=0.9, z_min=-0.1, z_max=0.5):
+    while True:
+        point = np.random.uniform(low=[0.0, -radius, z_min], high=[radius, radius, z_max])
+        if np.linalg.norm(point) <= radius:
+            return point
+
+# ==============================
+# 시각화
+# ==============================
+def visualize_3d_only(target, joint_angles, gbest_positions_history, iteration_count, current_error, total_evaluations):
+    arm_coords = forward_kinematics_3d(joint_angles)
+
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+
+    # 엔드이펙터 궤적: 각 iteration의 gbest 끝점들을 선으로
+    if len(gbest_positions_history) > 0:
+        traj = np.array([forward_kinematics_3d(a)[-1] for a in gbest_positions_history])
+        ax.plot(traj[:, 0], traj[:, 1], traj[:, 2], '--', color='gray', alpha=0.6, linewidth=1.5, label='End-effector Path (gbest)')
+
+    ax.plot(arm_coords[:, 0], arm_coords[:, 1], arm_coords[:, 2],
+            '-o', linewidth=3.5, markersize=7, color='blue', label="Robot Arm (gbest)")
+    ax.scatter(*target, color='red', s=150, label="Target", marker='*')
+    ax.scatter(*arm_coords[-1], color='green', s=120, label="End Effector", marker='o')
+
+    ax.set_title(f"Iteration {iteration_count}\nBest Error: {current_error:.8f} | Total Evals: {total_evaluations}",
+                 fontsize=15, fontweight='bold')
+    ax.set_xlim([-1, 1]); ax.set_ylim([-1, 1]); ax.set_zlim([-1, 1])
+    ax.set_xlabel('X'); ax.set_ylabel('Y'); ax.set_zlabel('Z')
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+def visualize_full_results(final_target, final_angles, gbest_positions_history, gbest_fitness_history, targets_history):
+    final_coords = forward_kinematics_3d(final_angles)
+
+    fig = plt.figure(figsize=(18, 5))
+
+    # 1) 최종 팔 상태 + 궤적
+    ax1 = fig.add_subplot(131, projection='3d')
+    traj = np.array([forward_kinematics_3d(a)[-1] for a in gbest_positions_history])
+    ax1.plot(traj[:, 0], traj[:, 1], traj[:, 2], '--', color='gray', alpha=0.6, linewidth=1.5, label='End-effector Path (gbest)')
+    arm_coords = forward_kinematics_3d(final_angles)
+    ax1.plot(arm_coords[:, 0], arm_coords[:, 1], arm_coords[:, 2],
+             '-o', linewidth=3, markersize=6, color='blue', label="Final Arm (gbest)")
+    ax1.scatter(*final_target, color='red', s=100, label="Final Target", marker='*')
+    ax1.scatter(*final_coords[-1], color='green', s=80, label="End Effector", marker='o')
+    ax1.set_title(f"Final Configuration\n({len(gbest_positions_history)} Iterations)", fontsize=13, fontweight='bold')
+    ax1.set_xlim([-1, 1]); ax1.set_ylim([-1, 1]); ax1.set_zlim([-1, 1])
+    ax1.set_xlabel('X'); ax1.set_ylabel('Y'); ax1.set_zlabel('Z')
+    ax1.legend()
+
+    # 2) 수렴 곡선(상대오차 = 각 step의 best_error / 그 step 타깃 거리)
+    ax2 = fig.add_subplot(132)
+    rel_errors = []
+    for e, tgt in zip(gbest_fitness_history, targets_history):
+        denom = max(np.linalg.norm(tgt), 1e-9)
+        rel_errors.append(e / denom)
+    iters = np.arange(1, len(rel_errors) + 1)
+    ax2.plot(iters, rel_errors, 'b-', linewidth=2, alpha=0.85)
+    ax2.set_title(f'Convergence (Relative Error, {len(rel_errors)} iters)', fontsize=13, fontweight='bold')
+    ax2.set_xlabel('Iteration'); ax2.set_ylabel('Relative Error'); ax2.set_yscale('log')
+    ax2.grid(True, alpha=0.3); ax2.set_xlim([1, len(rel_errors)])
+
+    # 3) 관절각 변화 (gbest)
+    ax3 = fig.add_subplot(133)
+    history_array = np.array(gbest_positions_history)  # [iters, DOF]
+    colors = ['red', 'blue', 'green', 'orange']
+    for i in range(DOF):
+        ax3.plot(iters, history_array[:, i], color=colors[i], linewidth=2, label=f'Joint {i+1}', alpha=0.9)
+    ax3.set_title(f'Joint Angles (gbest, {len(gbest_positions_history)} iters)', fontsize=13, fontweight='bold')
+    ax3.set_xlabel('Iteration'); ax3.set_ylabel('Angle (rad)')
+    ax3.grid(True, alpha=0.3); ax3.set_xlim([1, len(gbest_positions_history)])
+    ax3.legend(ncol=2)
+
+    plt.tight_layout()
+    plt.show()
+
+# ==============================
+# HPSO + Sliding Window
+# ==============================
+def initialize_sub_swarm(master_position, sub_pop_size):
+    sub_swarm = []
+    noise_range = 0.3
+    for _ in range(sub_pop_size):
+        position = master_position + np.random.uniform(-noise_range, noise_range, DOF)
+        for i in range(DOF):
+            position[i] = np.clip(position[i], *joint_bounds[i])
+        velocity = np.random.uniform(-0.1, 0.1, DOF)
+        sub_swarm.append({
+            'position': position.copy(),
+            'velocity': velocity.copy(),
+            'pbest_position': position.copy(),
+            'pbest_fitness': np.inf
+        })
+    return sub_swarm
+
+def update_sub_swarm_positions(sub_swarm, global_best):
+    """표준 PSO 업데이트(간단화)."""
+    for p in sub_swarm:
+        r1, r2, r3 = np.random.rand(3)
+        cognitive = 1.2 * r1 * (p['pbest_position'] - p['position'])
+        # NOTE: 'local_social'가 기존 코드에서 cognitive와 동일했음 → 중복항 제거
+        global_social = 0.8 * r3 * (global_best - p['position'])
+        p['velocity'] = 0.6 * p.get('velocity', np.zeros(DOF)) + cognitive + global_social
+        p['position'] += p['velocity']
+        for i in range(DOF):
+            p['position'][i] = np.clip(p['position'][i], *joint_bounds[i])
+
+def update_sub_swarm_with_master_info(sub_swarm, new_master_position):
+    """마스터의 새 위치를 일부 입자에 주입."""
+    num_to_update = len(sub_swarm) // 3
+    for i in range(num_to_update):
+        noise = np.random.uniform(-0.2, 0.2, DOF)
+        cand = new_master_position + noise
+        for j in range(DOF):
+            cand[j] = np.clip(cand[j], *joint_bounds[j])
+        sub_swarm[i]['position'] = cand
+        sub_swarm[i]['velocity'] = np.random.uniform(-0.05, 0.05, DOF)
+
+def hpso_sliding_window(target_function,
+                        master_pop_size=15, sub_pop_size=8,
+                        max_iterations=150, window_size=30, slide_step=15,
+                        w=0.5, c1=1.5, c2=1.5,
+                        visualize_every=50):
+  
+    # 기록
+    gbest_positions_history = []
+    gbest_fitness_history = []
+    targets_history = []
+
+    total_evaluations = 0
+    current_iteration = 0
+
+    print("=== HPSO + Sliding Window 시작 ===")
+    print(f"마스터 스웜: {master_pop_size}, 서브 스웜: {sub_pop_size}")
+    print(f"총 iteration: {max_iterations}, 윈도우: {window_size}, 슬라이드: {slide_step}")
+
+    # 전역 최적 초기화
+    gbest_position = np.array([np.random.uniform(*joint_bounds[j]) for j in range(DOF)])
+    gbest_fitness = np.inf
+
+    # 0회 상태 시각화 (타깃: t=0)
+    init_target = target_function(0)
+    visualize_3d_only(init_target, gbest_position, gbest_positions_history, 0, gbest_fitness, total_evaluations)
+
+    # 직전 윈도우에서의 master seed
+    window_best_masters = []
+
+    for window_start in range(0, max_iterations, slide_step):
+        if current_iteration >= max_iterations:
+            break
+
+        window_end = min(window_start + window_size, max_iterations)
+        window_iterations = min(window_end - window_start, max_iterations - current_iteration)
+        print(f"\n=== 윈도우 {window_start}-{window_end} ===")
+
+        # 마스터 스웜 초기화 (이전 윈도우 정보 활용)
+        master_swarm = []
+        for i in range(master_pop_size):
+            if window_best_masters and i < len(window_best_masters):
+                base = window_best_masters[i % len(window_best_masters)]
+                position = base + np.random.uniform(-0.2, 0.2, DOF)
+            else:
+                position = np.array([np.random.uniform(*joint_bounds[j]) for j in range(DOF)])
+            for j in range(DOF):
+                position[j] = np.clip(position[j], *joint_bounds[j])
+            velocity = np.zeros(DOF)
+            sub_swarm = initialize_sub_swarm(position, sub_pop_size)
+            master_swarm.append({
+                'id': i,
+                'position': position.copy(),
+                'velocity': velocity.copy(),
+                'pbest_position': position.copy(),
+                'pbest_fitness': np.inf,
+                'sub_swarm': sub_swarm
+            })
+
+        # 윈도우 지역 최적
+        window_gbest_position = master_swarm[0]['position'].copy()
+        window_gbest_fitness = np.inf
+
+        # 윈도우 내부 반복
+        for _ in range(window_iterations):
+            if current_iteration >= max_iterations:
+                break
+
+            # 이번 step의 "유일한" 타깃 (저장용)
+            current_target = target_function(current_iteration)
+            iteration_evals = 0
+
+            # (1) 각 마스터의 서브 스웜 탐색
+            for master_particle in master_swarm:
+                sub_best_pos = None
+                sub_best_fit = np.inf
+
+                for sub_particle in master_particle['sub_swarm']:
+                    ee = forward_kinematics_3d(sub_particle['position'])[-1]
+                    fitness = np.linalg.norm(ee - current_target)
+                    iteration_evals += 1; total_evaluations += 1
+
+                    # 개인 최적
+                    if fitness < sub_particle['pbest_fitness']:
+                        sub_particle['pbest_fitness'] = fitness
+                        sub_particle['pbest_position'] = sub_particle['position'].copy()
+
+                    # 서브스웜 최적
+                    if fitness < sub_best_fit:
+                        sub_best_fit = fitness
+                        sub_best_pos = sub_particle['position'].copy()
+
+                    # 윈도우 최적
+                    if fitness < window_gbest_fitness:
+                        window_gbest_fitness = fitness
+                        window_gbest_position = sub_particle['position'].copy()
+
+                    # 전역 최적
+                    if fitness < gbest_fitness:
+                        gbest_fitness = fitness
+                        gbest_position = sub_particle['position'].copy()
+
+                # 마스터 pbest 갱신 (서브스웜 결과 반영)
+                if sub_best_pos is not None and sub_best_fit < master_particle['pbest_fitness']:
+                    master_particle['pbest_fitness'] = sub_best_fit
+                    master_particle['pbest_position'] = sub_best_pos.copy()
+                    master_particle['position'] = sub_best_pos.copy()
+
+            # ---- 기록 (이번 step의 타깃과 gbest를 "같은 인덱스"로 저장) ----
+            gbest_positions_history.append(gbest_position.copy())
+            gbest_fitness_history.append(gbest_fitness)
+            targets_history.append(current_target.copy())
+            current_iteration += 1
+
+            # (2) 마스터 스웜 업데이트 (윈도우 최적을 향해)
+            for master_particle in master_swarm:
+                r1, r2 = np.random.rand(2)
+                cognitive = c1 * r1 * (master_particle['pbest_position'] - master_particle['position'])
+                social    = c2 * r2 * (window_gbest_position - master_particle['position'])
+                master_particle['velocity'] = w * master_particle['velocity'] + cognitive + social
+                master_particle['position'] += master_particle['velocity']
+                for i in range(DOF):
+                    master_particle['position'][i] = np.clip(master_particle['position'][i], *joint_bounds[i])
+
+            # (3) 서브 스웜 업데이트 + 마스터 정보 주입
+            for master_particle in master_swarm:
+                update_sub_swarm_positions(master_particle['sub_swarm'], window_gbest_position)
+                update_sub_swarm_with_master_info(master_particle['sub_swarm'], master_particle['position'])
+
+            # 중간 시각화 (정확히 그 step의 타깃/gbest 사용)
+            if visualize_every and (current_iteration % visualize_every == 0):
+                print(f"\n--- {current_iteration}회 iteration ---")
+                print(f"이번 iteration 평가 횟수: {iteration_evals} | 총 평가: {total_evaluations}")
+                print(f"현재 최적 적합도: {gbest_fitness:.8f}")
+                visualize_3d_only(current_target, gbest_position, gbest_positions_history,
+                                  current_iteration, gbest_fitness, total_evaluations)
+
+            if current_iteration >= max_iterations:
+                break
+
+        # 다음 윈도우 초기화를 위해 마스터들의 현재 위치를 보관
+        window_best_masters = [mp['position'].copy() for mp in master_swarm]
+        print(f"윈도우 완료. 윈도우 최적 적합도: {window_gbest_fitness:.8f}")
+
+    print(f"\n최종 통계: {current_iteration} iterations, {total_evaluations} evaluations")
+    return (gbest_position, gbest_fitness,
+            gbest_positions_history, gbest_fitness_history, targets_history,
+            total_evaluations)
+
+# ==============================
+# 실행부
+# ==============================
+def run_hpso_sliding_window():
+    # 기준 타깃(고정 seed로 재현성)
+    b_target = random_reachable_target()
+    base_target=lambda t:b_target
+    
+    (final_angles, final_error,
+     gbest_positions_history, gbest_fitness_history, targets_history,
+     total_evaluations) = hpso_sliding_window(
+        base_target, max_iterations=150, visualize_every=50
+    )
+
+    print("\n=== 최종 결과 ===")
+    print(f"최종 관절 각도 (gbest): {final_angles}")
+    print(f"최종 오차: {final_error:.10f} m")
+    print(f"총 iteration: {len(gbest_positions_history)}")
+    print(f"총 평가 횟수: {total_evaluations}")
+
+    # 최종 시각화 (마지막 step의 타깃과 gbest 사용)
+    final_target = targets_history[-1]
+    visualize_full_results(final_target, final_angles,
+                           gbest_positions_history, gbest_fitness_history, targets_history)
+
+    # 추가 통계
+    print("\n=== 추가 통계 ===")
+    last_ee = forward_kinematics_3d(final_angles)[-1]
+    print(f"최종 엔드이펙터: {last_ee}")
+    print(f"최종 타깃: {final_target}")
+    print(f"평가/iteration: {total_evaluations/len(gbest_positions_history):.2f}")
+    rel_err_pct = final_error / max(np.linalg.norm(final_target), 1e-9) * 100.0
+    print(f"상대 오차(마지막 타깃 기준): {rel_err_pct:.6f}%")
+
+    return (final_angles, final_error, gbest_positions_history,
+            gbest_fitness_history, targets_history, total_evaluations)
+
+if __name__ == "__main__":
+    (final_angles, final_error, gbest_positions_history,
+     gbest_fitness_history, targets_history, total_evaluations) = run_hpso_sliding_window()
