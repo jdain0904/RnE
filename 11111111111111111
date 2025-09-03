@@ -21,5 +21,9 @@ cat > ~/ros2_ws/src/hpso_ik/package.xml <<'XML'
   <exec_depend>ros2_control</exec_depend>
   <exec_depend>ros2_controllers</exec_depend>
   <exec_depend>python3-sklearn</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
 </package>
 XML
