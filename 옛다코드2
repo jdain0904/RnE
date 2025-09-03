@@ -1,4 +1,3 @@
-cat > ~/ros2_ws/src/hpso_ik/hpso_ik/algos_svm.py <<'PY'
 import numpy as np
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
