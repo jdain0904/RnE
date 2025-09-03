@@ -218,7 +218,6 @@ def hpso_sliding_window_with_svm(target_function,
                 sub_best_pos = None
                 sub_best_fit = np.inf
                 for sub_particle in master_particle['sub_swarm']:
-                   for sub_particle in master_particle['sub_swarm']:
                     q = sub_particle['position']
                     ee = forward_kinematics_3d(q)[-1]
                     d = np.linalg.norm(ee - current_target)
