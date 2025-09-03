@@ -1,0 +1,10 @@
+python3 - <<'PY'
+from pathlib import Path
+p=Path('~/ros2_ws/src/hpso_ik/setup.py').expanduser()
+t=p.read_text()
+if "('share/' + package_name + '/launch'," not in t:
+    t=t.replace("('share/' + package_name, ['package.xml']),",
+                "('share/' + package_name, ['package.xml']),\n        ('share/' + package_name + '/launch', ['launch/hpso_demo.launch.py','launch/hpso_svm.launch.py']),")
+    p.write_text(t)
+print('data_files launch ensured')
+PY
