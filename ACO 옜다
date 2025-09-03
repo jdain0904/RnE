@@ -1,0 +1,143 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from dataclasses import dataclass
+
+# ----------------- Robot Arm -----------------
+class Arm4DOF:
+    def __init__(self, links, bounds):
+        self.links = links
+        self.bounds = bounds
+    def fk(self, ang):
+        x=y=z=0.0; th_y=0; th_z=0
+        for i,(a,L) in enumerate(zip(ang,self.links)):
+            if i%2==0: th_y+=a
+            else: th_z+=a
+            x+=L*np.cos(th_y)*np.cos(th_z)
+            y+=L*np.sin(th_y)
+            z+=L*np.cos(th_y)*np.sin(th_z)
+        return np.array([x,y,z])
+    def joints_xyz(self, ang):
+        pts=[[0,0,0]]; x=y=z=0.0; th_y=0; th_z=0
+        for i,(a,L) in enumerate(zip(ang,self.links)):
+            if i%2==0: th_y+=a
+            else: th_z+=a
+            x+=L*np.cos(th_y)*np.cos(th_z)
+            y+=L*np.sin(th_y)
+            z+=L*np.cos(th_y)*np.sin(th_z)
+            pts.append([x,y,z])
+        return np.array(pts)
+
+# ----------------- ACO -----------------
+@dataclass
+class ACOCfg:
+    n_ants:int=20; iters:int=40; n_best:int=5
+    evap:float=0.5; alpha:float=1.0; beta:float=5.0
+    grid_res:int=19; max_steps:int=60; reach_tol:float=0.02
+    tau0:float=0.08; seed:int=11
+
+class ACOPlanner:
+    def __init__(self, arm, cfg, target, start=None):
+        self.arm=arm; self.cfg=cfg; self.target=target
+        self.rng=np.random.default_rng(cfg.seed)
+        self.grids=[np.linspace(lo,hi,cfg.grid_res) for (lo,hi) in arm.bounds]
+        self.start_idx=self.angles_to_idx(np.zeros(4) if start is None else start)
+        self.tau={}
+    @staticmethod
+    def actions(): return [(j,d) for j in range(4) for d in (-1,+1)]
+    def idx_to_angles(self, idx): return np.array([self.grids[j][idx[j]] for j in range(4)])
+    def angles_to_idx(self, ang): 
+        return np.array([int(np.argmin(np.abs(self.grids[j]-ang[j]))) for j in range(4)])
+    def next_idx(self, idx,a):
+        j,d=self.actions()[a]; nxt=idx.copy(); nxt[j]+=d
+        return nxt if 0<=nxt[j]<self.cfg.grid_res else None
+    def get_tau(self,s,a): return self.tau.get((tuple(s),a), self.cfg.tau0)
+    def add_tau(self,s,a,v): self.tau[(tuple(s),a)]=self.get_tau(s,a)+v
+    def evaporate(self): 
+        for k in list(self.tau): self.tau[k]*=(1.0-self.cfg.evap)
+    def rollout(self):
+        idx=self.start_idx.copy(); states=[idx.copy()]
+        for _ in range(self.cfg.max_steps):
+            if np.linalg.norm(self.arm.fk(self.idx_to_angles(idx))-self.target)<=self.cfg.reach_tol: break
+            numer=[]; valid=[]; cache=[]
+            for a in range(8):
+                nxt=self.next_idx(idx,a)
+                if nxt is None: continue
+                dist=np.linalg.norm(self.arm.fk(self.idx_to_angles(nxt))-self.target)
+                eta=1/(1e-8+dist); tau=self.get_tau(idx,a)
+                numer.append((tau**self.cfg.alpha)*(eta**self.cfg.beta))
+                valid.append(a); cache.append((a,nxt))
+            if not valid: break
+            probs=np.array(numer)/sum(numer)
+            pick=self.rng.choice(len(valid),p=probs)
+            a,nxt=cache[pick]; idx=nxt; states.append(idx.copy())
+        d=np.linalg.norm(self.arm.fk(self.idx_to_angles(idx))-self.target)
+        return d,states
+    def fit(self):
+        best=(1e9,None)
+        for _ in range(self.cfg.iters):
+            tours=[self.rollout() for _ in range(self.cfg.n_ants)]
+            tours.sort(key=lambda x:x[0]); elite=tours[:self.cfg.n_best]
+            if elite[0][0]<best[0]: best=elite[0]
+            self.evaporate()
+            for cost,states in elite:
+                reward=1/(cost+1e-6)
+                for s0,s1 in zip(states[:-1],states[1:]):
+                    diff=s1-s0; j=int(np.nonzero(diff)[0][0]); d=int(np.sign(diff[j]))
+                    a=j*2+(0 if d==-1 else 1); self.add_tau(s0,a,reward)
+        return best
+
+# ----------------- IK refine -----------------
+def jacobian(arm, ang, eps=1e-5):
+    base=arm.fk(ang); J=np.zeros((3,4))
+    for i in range(4):
+        a=ang.copy(); a[i]+=eps
+        J[:,i]=(arm.fk(a)-base)/eps
+    return J
+def ik_refine(arm, ang, target, tol=1e-4, max_iter=600, step=0.3):
+    for _ in range(max_iter):
+        e=target-arm.fk(ang)
+        if np.linalg.norm(e)<tol: break
+        J=jacobian(arm,ang); ang+=step*J.T@e
+    return ang
+
+# ----------------- Cubic Polynomial -----------------
+def cubic_poly(start,goal,steps=50):
+    traj=[]
+    for t in np.linspace(0,1,steps):
+        s=3*t**2-2*t**3   # smoothstep
+        traj.append(start+(goal-start)*s)
+    return np.array(traj)
+
+# ----------------- Visualization -----------------
+def plot_arm(arm, ang, target, title):
+    coords=arm.joints_xyz(ang)
+    fig=plt.figure(); ax=fig.add_subplot(111,projection="3d")
+    ax.plot(coords[:,0],coords[:,1],coords[:,2],'-o', label="arm")
+    ax.scatter(*target,c="r",marker="x",s=80, label="target")
+    ax.set_title(title); ax.set_xlim(0,0.7); ax.set_ylim(0,0.7); ax.set_zlim(0,0.7)
+    ax.legend(); plt.show()
+
+def plot_traj(arm, traj, target, title):
+    ee=np.array([arm.fk(a) for a in traj])
+    final=arm.joints_xyz(traj[-1])   # 마지막 포즈
+    fig=plt.figure(); ax=fig.add_subplot(111,projection="3d")
+    ax.plot(ee[:,0],ee[:,1],ee[:,2],'-', label="EE path")
+    ax.plot(final[:,0],final[:,1],final[:,2],'-o', label="arm(final)")
+    ax.scatter(*target,c="r",marker="x",s=80, label="target")
+    ax.set_title(title); ax.set_xlim(0,0.7); ax.set_ylim(0,0.7); ax.set_zlim(0,0.7)
+    ax.legend(); plt.show()
+
+# ----------------- Main -----------------
+if __name__=="__main__":
+    arm=Arm4DOF([0.3,0.3,0.2,0.1],[(-np.pi/2,np.pi/2)]*4)
+    target=np.array([0.45,0.25,0.20])
+    cfg=ACOCfg(); planner=ACOPlanner(arm,cfg,target)
+    dist, states=planner.fit()
+    aco_final=planner.idx_to_angles(states[-1])
+    plot_arm(arm, aco_final, target,"After ACO")
+
+    refined=ik_refine(arm, aco_final, target)
+    plot_arm(arm, refined, target,"After IK refine")
+
+    traj=cubic_poly(aco_final, refined, steps=50)
+    plot_traj(arm, traj, target,"Cubic Polynomial Trajectory")
