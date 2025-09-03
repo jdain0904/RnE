@@ -1,0 +1,21 @@
+cat > ~/ros2_ws/src/hpso_ik/launch/hpso_svm.launch.py <<'PY'
+from launch import LaunchDescription
+from launch_ros.actions import Node
+def generate_launch_description():
+    return LaunchDescription([
+        Node(
+            package='hpso_ik',
+            executable='hpso_svm_node',
+            name='hpso_svm_node',
+            output='screen',
+            parameters=[{
+                'max_iterations': 150,
+                'master_pop_size': 15,
+                'sub_pop_size': 8,
+                'w': 0.5, 'c1': 1.5, 'c2': 1.5,
+                'target_margin': 1.0, 'w_margin': 0.5, 'reduction': 'mean',
+                'fixed_frame': 'base'
+            }]
+        ),
+    ])
+PY
