@@ -1,0 +1,47 @@
+# setup.py
+cat > hpso_ik/setup.py <<'PY'
+from setuptools import setup, find_packages
+package_name = 'hpso_ik'
+
+setup(
+    name=package_name,
+    version='0.0.1',
+    packages=find_packages(include=['hpso_ik','hpso_ik.*']),
+    data_files=[
+        ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
+        ('share/' + package_name, ['package.xml']),
+    ],
+    install_requires=['setuptools'],
+    zip_safe=True,
+    maintainer='you',
+    maintainer_email='you@example.com',
+    description='Minimal ROS2 python package example',
+    license='Apache-2.0',
+    entry_points={
+        'console_scripts': [
+            'minimal_node = hpso_ik.minimal_node:main',
+        ],
+    },
+)
+PY
+
+# setup.cfg
+cat > hpso_ik/setup.cfg <<'CFG'
+[develop]
+script_dir=$base/lib/hpso_ik
+[install]
+install_scripts=$base/lib/hpso_ik
+CFG
+
+# package.xml
+cat > hpso_ik/package.xml <<'XML'
+<package format="3">
+  <name>hpso_ik</name>
+  <version>0.0.1</version>
+  <description>Minimal ROS2 python package example</description>
+  <maintainer email="you@example.com">you</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+</package>
+XML
