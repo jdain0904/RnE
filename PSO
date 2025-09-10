@@ -59,7 +59,7 @@ def visualize_full_results(final_target, final_angles, gbest_positions_history, 
     ax2=fig.add_subplot(132)
     rel=[]
     for e,tgt in zip(gbest_fitness_history, targets_history):
-        denom=max(np.linalg.norm(tgt),1e-9); rel.append(e/denom)
+        denom=max(np.linalg.norm(tgt),1e-9); rel.append(100*e/denom)
     iters=np.arange(1,len(rel)+1)
     if len(rel)>0: ax2.plot(iters,rel,'b-',linewidth=2,alpha=0.85)
     ax2.set_title(f'Convergence (Relative Error, {len(rel)} iters)',fontsize=13,fontweight='bold')
