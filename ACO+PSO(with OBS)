@@ -1,0 +1,571 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC, LinearSVC, OneClassSVM
+from sklearn.calibration import CalibratedClassifierCV
+from dataclasses import dataclass
+
+DOF = 4
+link_lengths = [0.3, 0.3, 0.2, 0.1]
+joint_bounds = [(-np.pi/2, np.pi/2) for _ in range(DOF)]
+np.random.seed(42)
+
+# ----------------- ACO -----------------
+@dataclass
+class ACOCfg:
+    n_ants:int=20; iters:int=40; n_best:int=5
+    evap:float=0.5; alpha:float=1.0; beta:float=5.0
+    grid_res:int=19; max_steps:int=60; reach_tol:float=0.02
+    tau0:float=0.08; seed:int=11
+
+class ACOPlanner:
+    def __init__(self, arm, cfg, target, start=None, obstacles=None):
+        self.arm = arm            # forward_kinematics_3d 함수
+        self.cfg = cfg
+        self.target = target
+        self.obstacles = obstacles if obstacles is not None else []  # ✅ 장애물 리스트 추가
+        self.rng = np.random.default_rng(cfg.seed)
+        self.grids = [np.linspace(lo, hi, cfg.grid_res) for (lo, hi) in joint_bounds]
+        self.start_idx = self.angles_to_idx(np.zeros(4) if start is None else start)
+        self.tau = {}
+
+    @staticmethod
+    def actions():
+        return [(j, d) for j in range(4) for d in (-1, +1)]
+
+    def idx_to_angles(self, idx):
+        return np.array([self.grids[j][idx[j]] for j in range(4)])
+
+    def angles_to_idx(self, ang):
+        return np.array([int(np.argmin(np.abs(self.grids[j]-ang[j]))) for j in range(4)])
+
+    def next_idx(self, idx, a):
+        j, d = self.actions()[a]; nxt = idx.copy(); nxt[j] += d
+        return nxt if 0 <= nxt[j] < self.cfg.grid_res else None
+
+    def get_tau(self, s, a):
+        return self.tau.get((tuple(s), a), self.cfg.tau0)
+
+    def add_tau(self, s, a, v):
+        self.tau[(tuple(s), a)] = self.get_tau(s, a) + v
+
+    def evaporate(self):
+        for k in list(self.tau):
+            self.tau[k] *= (1.0 - self.cfg.evap)
+
+    def rollout(self):
+        idx = self.start_idx.copy(); states = [idx.copy()]
+        for _ in range(self.cfg.max_steps):
+            pos = self.arm(self.idx_to_angles(idx))[-1]
+            if np.linalg.norm(pos - self.target) <= self.cfg.reach_tol:
+                break
+            numer=[]; valid=[]; cache=[]
+            for a in range(8):
+                nxt = self.next_idx(idx, a)
+                if nxt is None: continue
+                pos = self.arm(self.idx_to_angles(nxt))[-1]
+                dist_target = np.linalg.norm(pos - self.target)
+
+                # ✅ 장애물 회피 항 추가
+                obs_penalty = 0.0
+                for obs in self.obstacles:
+                    d_obs = np.linalg.norm(pos - obs)
+                    obs_penalty += 1.0 / (d_obs**2 + 1e-3)
+
+
+                eta = 1 / (1e-8 + dist_target + 0.5 * obs_penalty)  # ✅ 수정
+                tau = self.get_tau(idx, a)
+                numer.append((tau**self.cfg.alpha) * (eta**self.cfg.beta))
+                valid.append(a); cache.append((a, nxt))
+            if not valid: break
+            probs = np.array(numer)/sum(numer)
+            pick = self.rng.choice(len(valid), p=probs)
+            a, nxt = cache[pick]; idx = nxt; states.append(idx.copy())
+        d = np.linalg.norm(self.arm(self.idx_to_angles(idx))[-1] - self.target)
+        return d, states
+
+    def fit(self):
+        best = (1e9, None)
+        for _ in range(self.cfg.iters):
+            tours = [self.rollout() for _ in range(self.cfg.n_ants)]
+            tours.sort(key=lambda x: x[0]); elite = tours[:self.cfg.n_best]
+            if elite[0][0] < best[0]: best = elite[0]
+            self.evaporate()
+            for cost, states in elite:
+                reward = 1/(cost+1e-6)
+                for s0, s1 in zip(states[:-1], states[1:]):
+                    diff = s1-s0
+                    j = int(np.nonzero(diff)[0][0])
+                    d = int(np.sign(diff[j]))
+                    a = j*2 + (0 if d == -1 else 1)
+                    self.add_tau(s0, a, reward)
+        return best
+
+# ----------------- IK refine -----------------
+def jacobian(arm, ang, eps=1e-5):
+    base=arm.fk(ang); J=np.zeros((3,4))
+    for i in range(4):
+        a=ang.copy(); a[i]+=eps
+        J[:,i]=(arm.fk(a)-base)/eps
+    return J
+def ik_refine(arm, ang, target, tol=1e-4, max_iter=600, step=0.3):
+    for _ in range(max_iter):
+        e=target-arm.fk(ang)
+        if np.linalg.norm(e)<tol: break
+        J=jacobian(arm,ang); ang+=step*J.T@e
+    return ang
+
+# ----------------- Cubic Polynomial -----------------
+def cubic_poly(start,goal,steps=50):
+    traj=[]
+    for t in np.linspace(0,1,steps):
+        s=3*t**2-2*t**3   # smoothstep
+        traj.append(start+(goal-start)*s)
+    return np.array(traj)
+
+def dh_transform(a, alpha, d, theta):
+    """
+    Denavit-Hartenberg 변환행렬
+    a: 링크 길이
+    alpha: 링크 트위스트 (rad)
+    d: 링크 offset (z축 이동)
+    theta: 관절 회전각 (rad)
+    """
+    return np.array([
+        [np.cos(theta), -np.sin(theta)*np.cos(alpha),  np.sin(theta)*np.sin(alpha), a*np.cos(theta)],
+        [np.sin(theta),  np.cos(theta)*np.cos(alpha), -np.cos(theta)*np.sin(alpha), a*np.sin(theta)],
+        [0,              np.sin(alpha),                np.cos(alpha),               d],
+        [0,              0,                            0,                           1]
+    ])
+
+def forward_kinematics_3d(joint_angles):
+    """
+    4-DOF 로봇팔 Forward Kinematics (DH 파라미터 기반)
+    - 모든 관절이 실제로 엔드이펙터에 기여하도록 구성
+    """
+    coords = [np.array([0,0,0])]
+    T = np.eye(4)
+
+    # 간단히: 모든 관절은 회전관절(revolute), 링크는 x축 방향으로만 있다고 가정
+    # alpha=0, d=0 으로 두면 planar+3D 회전 가능
+    for i, (theta, a) in enumerate(zip(joint_angles, link_lengths)):
+        A = dh_transform(a=a, alpha=0, d=0, theta=theta)
+        T = T @ A
+        pos = T[:3, 3]
+        coords.append(pos)
+
+    return np.array(coords)
+
+# ✅ 장애물 좌표 랜덤 생성
+def random_obstacles(n=3, radius=0.8, z_min=-0.1, z_max=0.5):
+    """
+    n 개의 장애물을 로봇팔 작업공간 내에 무작위로 생성
+    """
+    obs = []
+    for _ in range(n):
+        while True:
+            p = np.random.uniform(low=[-radius, -radius, z_min],
+                                  high=[radius, radius, z_max])
+            if np.linalg.norm(p) <= radius:
+                obs.append(p)
+                break
+    return obs
+
+def random_reachable_target(radius=0.9, z_min=-0.1, z_max=0.5):
+    while True:
+        point = np.random.uniform(low=[0.0, -radius, z_min], high=[radius, radius, z_max])
+        if np.linalg.norm(point) <= radius:
+            return point
+
+def visualize_3d_only(target, joint_angles, gbest_positions_history,
+                      iteration_count, current_error, total_evaluations,
+                      obstacles=None):
+    arm_coords = forward_kinematics_3d(joint_angles)
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+
+    if len(gbest_positions_history) > 0:
+        traj = np.array([forward_kinematics_3d(a)[-1] for a in gbest_positions_history])
+        ax.plot(traj[:, 0], traj[:, 1], traj[:, 2], '--', color='gray', alpha=0.6, linewidth=1.5)
+
+    ax.plot(arm_coords[:, 0], arm_coords[:, 1], arm_coords[:, 2],
+            '-o', linewidth=3.5, markersize=7, color='blue', label="Robot Arm")
+    ax.scatter(*target, color='red', s=150, label="Target", marker='*')
+    ax.scatter(*arm_coords[-1], color='green', s=120, label="End Effector", marker='o')
+
+    # 🚧 장애물 시각화
+    if obstacles is not None:
+        for obs in obstacles:
+            ax.scatter(*obs, color='black', s=80, marker='X', label="Obstacle")
+
+    ax.set_title(f"Iteration {iteration_count}\nBest Error: {current_error:.8f} | Total Evals: {total_evaluations}")
+    ax.set_xlim([-1, 1]); ax.set_ylim([-1, 1]); ax.set_zlim([-1, 1])
+    ax.set_xlabel('X'); ax.set_ylabel('Y'); ax.set_zlabel('Z')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+def visualize_full_results(final_target, final_angles, gbest_positions_history, gbest_fitness_history, targets_history):
+    final_coords = forward_kinematics_3d(final_angles)
+    fig = plt.figure(figsize=(18, 5))
+    ax1 = fig.add_subplot(131, projection='3d')
+    traj = np.array([forward_kinematics_3d(a)[-1] for a in gbest_positions_history])
+    ax1.plot(traj[:, 0], traj[:, 1], traj[:, 2], '--', color='gray', alpha=0.6, linewidth=1.5, label='End-effector Path (gbest)')
+    arm_coords = forward_kinematics_3d(final_angles)
+    ax1.plot(arm_coords[:, 0], arm_coords[:, 1], arm_coords[:, 2], '-o', linewidth=3, markersize=6, color='blue', label="Final Arm (gbest)")
+    ax1.scatter(*final_target, color='red', s=100, label="Final Target", marker='*')
+    ax1.scatter(*final_coords[-1], color='green', s=80, label="End Effector", marker='o')
+    ax1.set_title(f"Final Configuration\n({len(gbest_positions_history)} Iterations)", fontsize=13, fontweight='bold')
+    ax1.set_xlim([-1, 1]); ax1.set_ylim([-1, 1]); ax1.set_zlim([-1, 1])
+    ax1.set_xlabel('X'); ax1.set_ylabel('Y'); ax1.set_zlabel('Z')
+    ax1.legend()
+    ax2 = fig.add_subplot(132)
+    rel_errors = []
+    for e, tgt in zip(gbest_fitness_history, targets_history):
+        denom = max(np.linalg.norm(tgt), 1e-9)
+        rel_errors.append(e / denom)
+    iters = np.arange(1, len(rel_errors) + 1)
+    ax2.plot(iters, rel_errors, 'b-', linewidth=2, alpha=0.85)
+    ax2.set_title(f'Convergence (Relative Error, {len(rel_errors)} iters)', fontsize=13, fontweight='bold')
+    ax2.set_xlabel('Iteration'); ax2.set_ylabel('Relative Error'); ax2.set_yscale('log')
+    ax2.grid(True, alpha=0.3); ax2.set_xlim([1, len(rel_errors)])
+    ax3 = fig.add_subplot(133)
+    history_array = np.array(gbest_positions_history)
+    colors = ['red', 'blue', 'green', 'orange']
+    for i in range(DOF):
+        ax3.plot(iters, history_array[:, i], color=colors[i], linewidth=2, label=f'Joint {i+1}', alpha=0.9)
+    ax3.set_title(f'Joint Angles (gbest, {len(gbest_positions_history)} iters)', fontsize=13, fontweight='bold')
+    ax3.set_xlabel('Iteration'); ax3.set_ylabel('Angle (rad)')
+    ax3.grid(True, alpha=0.3); ax3.set_xlim([1, len(gbest_positions_history)])
+    ax3.legend(ncol=2)
+    plt.tight_layout()
+    plt.show()
+
+def initialize_sub_swarm(master_position, sub_pop_size):
+    sub_swarm = []
+    noise_range = 0.3
+    for _ in range(sub_pop_size):
+        position = master_position + np.random.uniform(-noise_range, noise_range, DOF)
+        for i in range(DOF):
+            position[i] = np.clip(position[i], *joint_bounds[i])
+        velocity = np.random.uniform(-0.1, 0.1, DOF)
+        sub_swarm.append({'position': position.copy(),'velocity': velocity.copy(),'pbest_position': position.copy(),'pbest_fitness': np.inf})
+    return sub_swarm
+
+def update_sub_swarm_positions(sub_swarm, global_best):
+    for p in sub_swarm:
+        r1, r2, r3 = np.random.rand(3)
+        cognitive = 1.2 * r1 * (p['pbest_position'] - p['position'])
+        global_social = 0.8 * r3 * (global_best - p['position'])
+        p['velocity'] = 0.6 * p.get('velocity', np.zeros(DOF)) + cognitive + global_social
+        p['position'] += p['velocity']
+        for i in range(DOF):
+            p['position'][i] = np.clip(p['position'][i], *joint_bounds[i])
+
+def update_sub_swarm_with_master_info(sub_swarm, new_master_position):
+    num_to_update = len(sub_swarm) // 3
+    for i in range(num_to_update):
+        noise = np.random.uniform(-0.2, 0.2, DOF)
+        cand = new_master_position + noise
+        for j in range(DOF):
+            cand[j] = np.clip(cand[j], *joint_bounds[j])
+        sub_swarm[i]['position'] = cand
+        sub_swarm[i]['velocity'] = np.random.uniform(-0.05, 0.05, DOF)
+
+def build_judge(kind="svc_rbf", prob=False, **kw):
+    if kind=="svc_rbf":
+        return Pipeline([("scaler", StandardScaler()), ("clf", SVC(kernel="rbf", class_weight="balanced", probability=prob, **kw))])
+    if kind=="linear_svc":
+        return Pipeline([("scaler", StandardScaler(with_mean=False)), ("clf", LinearSVC(**kw))])
+    if kind=="oneclass":
+        return Pipeline([("scaler", StandardScaler()), ("clf", OneClassSVM(**kw))])
+    raise ValueError
+
+def fit_judge(judge, X, y=None, prob=False, cv=5):
+    if y is None:
+        judge.fit(X)
+        return judge
+    last = judge.named_steps.get("clf")
+    if isinstance(last, LinearSVC) and prob:
+        cal = CalibratedClassifierCV(last, method="sigmoid", cv=cv)
+        out = Pipeline([("scaler", judge.named_steps["scaler"]), ("cal", cal)])
+        out.fit(X, y)
+        return out
+    judge.fit(X, y)
+    return judge
+
+def margin_score(judge, X):
+    steps = list(judge.named_steps.values())
+    last = steps[-1]
+    sc = judge.named_steps.get("scaler", None)
+    Z = X if sc is None else sc.transform(X)
+    if hasattr(last, "decision_function"):
+        z = last.decision_function(Z)
+        return z if z.ndim==1 else z.max(axis=1)
+    if hasattr(last, "predict_proba"):
+        p = last.predict_proba(Z)[:, -1]
+        return np.log((p+1e-12)/(1-p+1e-12))
+    return judge.predict(Z).astype(float)
+
+def base_cost_wrapper(current_target):
+    def g(Xb):
+        ee = np.array([forward_kinematics_3d(x)[-1] for x in Xb])
+        d = np.linalg.norm(ee - current_target[None, :], axis=1)
+        return float(d.mean())
+    return g
+
+def make_fitness_with_svm_aco_obs_hard(judge, base_cost, aco_path,
+                                       obstacles, target_margin=1.0,
+                                       w_margin=0.3, w_aco=0.3,
+                                       obs_radius=0.15,    # 🚧 장애물 안전 반경
+                                       reduction="mean"):
+    """
+    PSO fitness 함수 (Hard Constraint 적용)
+    - 타깃 도달을 반드시 보장
+    - 장애물 반경 내로 들어가면 무효 처리
+    """
+    def f(Xb):
+        # --- 타깃 거리 (최우선) ---
+        base = base_cost(Xb)
+
+        # --- SVM margin (보조) ---
+        m = margin_score(judge, Xb)
+        r = m.mean() if reduction == "mean" else m.min()
+        pen = max(0.0, target_margin - r)
+
+        # --- ACO 보조 (경로 매끄럽게) ---
+        if aco_path is not None and len(aco_path) > 0:
+            ee = np.array([forward_kinematics_3d(x)[-1] for x in Xb])
+            dist_aco = np.min([np.linalg.norm(ee - p, axis=1) for p in aco_path], axis=0)
+            aco_term = dist_aco.mean()
+        else:
+            aco_term = 0.0
+
+        # --- Hard Constraint: 장애물 체크 ---
+        if obstacles is not None and len(obstacles) > 0:
+            ee = np.array([forward_kinematics_3d(x)[-1] for x in Xb])
+            for obs in obstacles:
+                d_obs = np.linalg.norm(ee - obs, axis=1)
+                if np.any(d_obs < obs_radius):   # 🚫 충돌
+                    return 1e6   # 매우 큰 페널티 → 무효 처리
+
+        # --- 최종 합산 ---
+        return base + w_margin * pen + w_aco * aco_term
+
+    return f
+
+def hpso_sliding_window_with_svm(target_function,
+                                 svm_judge, aco_path,
+                                 obstacles=None,          # 🚧 장애물 추가
+                                 master_pop_size=15, sub_pop_size=8,
+                                 max_iterations=150, window_size=30, slide_step=15,
+                                 w=0.5, c1=1.5, c2=1.5,
+                                 visualize_every=50,
+                                 target_margin=1.0, w_margin=0.3,
+                                 w_aco=0.3, w_obs=0.1,   # 🚧 장애물 가중치 추가
+                                 reduction="mean"):
+    gbest_positions_history = []
+    gbest_fitness_history = []
+    targets_history = []
+    total_evaluations = 0
+    current_iteration = 0
+
+    # 초기 gbest 설정
+    gbest_position = np.array([np.random.uniform(*joint_bounds[j]) for j in range(DOF)])
+    gbest_fitness = np.inf
+    init_target = target_function(0)
+
+    visualize_3d_only(init_target, gbest_position,
+                      gbest_positions_history, 0, gbest_fitness, total_evaluations,
+                      obstacles=obstacles)  # 🚧 장애물 시각화 포함
+
+    window_best_masters = []
+    for window_start in range(0, max_iterations, slide_step):
+        if current_iteration >= max_iterations:
+            break
+        window_end = min(window_start + window_size, max_iterations)
+        window_iterations = min(window_end - window_start, max_iterations - current_iteration)
+
+        # Master swarm 초기화
+        master_swarm = []
+        for i in range(master_pop_size):
+            if window_best_masters and i < len(window_best_masters):
+                base = window_best_masters[i % len(window_best_masters)]
+                position = base + np.random.uniform(-0.2, 0.2, DOF)
+            else:
+                position = np.array([np.random.uniform(*joint_bounds[j]) for j in range(DOF)])
+            for j in range(DOF):
+                position[j] = np.clip(position[j], *joint_bounds[j])
+            velocity = np.zeros(DOF)
+            sub_swarm = initialize_sub_swarm(position, sub_pop_size)
+            master_swarm.append({'id': i,
+                                 'position': position.copy(),
+                                 'velocity': velocity.copy(),
+                                 'pbest_position': position.copy(),
+                                 'pbest_fitness': np.inf,
+                                 'sub_swarm': sub_swarm})
+
+        window_gbest_position = master_swarm[0]['position'].copy()
+        window_gbest_fitness = np.inf
+
+        for _ in range(window_iterations):
+            if current_iteration >= max_iterations:
+                break
+            current_target = target_function(current_iteration)
+            iteration_evals = 0
+
+            # 🚧 장애물 반영 fitness 함수
+            # 🚧 장애물 반영 fitness 함수 (타깃 우선)
+            base_cost = base_cost_wrapper(current_target)
+            fitness_fn = make_fitness_with_svm_aco_obs_hard(
+                svm_judge, base_cost, aco_path,
+                obstacles, target_margin=target_margin,
+                w_margin=w_margin, w_aco=w_aco,
+                reduction=reduction)
+
+            # Master & Sub swarm 업데이트
+            for master_particle in master_swarm:
+                sub_best_pos = None
+                sub_best_fit = np.inf
+                for sub_particle in master_particle['sub_swarm']:
+                    # Fitness 평가
+                    fitness = fitness_fn([sub_particle['position']])
+                    iteration_evals += 1
+                    total_evaluations += 1
+
+                    # pbest 갱신
+                    if fitness < sub_particle['pbest_fitness']:
+                        sub_particle['pbest_fitness'] = fitness
+                        sub_particle['pbest_position'] = sub_particle['position'].copy()
+                    if fitness < sub_best_fit:
+                        sub_best_fit = fitness
+                        sub_best_pos = sub_particle['position'].copy()
+                    if fitness < window_gbest_fitness:
+                        window_gbest_fitness = fitness
+                        window_gbest_position = sub_particle['position'].copy()
+                    if fitness < gbest_fitness:
+                        gbest_fitness = fitness
+                        gbest_position = sub_particle['position'].copy()
+
+                # Master particle pbest 업데이트
+                if sub_best_pos is not None and sub_best_fit < master_particle['pbest_fitness']:
+                    master_particle['pbest_fitness'] = sub_best_fit
+                    master_particle['pbest_position'] = sub_best_pos.copy()
+                    master_particle['position'] = sub_best_pos.copy()
+
+            gbest_positions_history.append(gbest_position.copy())
+            gbest_fitness_history.append(gbest_fitness)
+            targets_history.append(current_target.copy())
+            current_iteration += 1
+
+            # Master swarm 업데이트
+            for master_particle in master_swarm:
+                r1, r2 = np.random.rand(2)
+                cognitive = c1 * r1 * (master_particle['pbest_position'] - master_particle['position'])
+                social    = c2 * r2 * (window_gbest_position - master_particle['position'])
+                master_particle['velocity'] = w * master_particle['velocity'] + cognitive + social
+                master_particle['position'] += master_particle['velocity']
+                for i in range(DOF):
+                    master_particle['position'][i] = np.clip(master_particle['position'][i], *joint_bounds[i])
+
+            for master_particle in master_swarm:
+                update_sub_swarm_positions(master_particle['sub_swarm'], window_gbest_position)
+                update_sub_swarm_with_master_info(master_particle['sub_swarm'], master_particle['position'])
+
+            # 시각화
+            if visualize_every and (current_iteration % visualize_every == 0):
+                visualize_3d_only(current_target, gbest_position,
+                                  gbest_positions_history,
+                                  current_iteration, gbest_fitness,
+                                  total_evaluations,
+                                  obstacles=obstacles)
+
+            if current_iteration >= max_iterations:
+                break
+
+        window_best_masters = [mp['position'].copy() for mp in master_swarm]
+
+    return (gbest_position, gbest_fitness,
+            gbest_positions_history, gbest_fitness_history,
+            targets_history, total_evaluations)
+
+def train_default_judge():
+    try:
+        X = np.load("joint_vectors.npy")
+        try:
+            y = np.load("labels.npy")
+        except:
+            y = None
+    except:
+        X = []
+        for _ in range(4000):
+            q = np.array([np.random.uniform(*joint_bounds[j]) for j in range(DOF)])
+            X.append(q)
+        X = np.array(X)
+        y = None
+    if y is None:
+        j = build_judge("oneclass", gamma="scale", nu=0.1)
+        return fit_judge(j, X, None)
+    j = build_judge("svc_rbf", prob=False, C=1.0, gamma="scale")
+    return fit_judge(j, X, y, prob=False)
+
+def run_hpso_sliding_window_with_svm(target_margin=1.0, w_margin=0.5, reduction="mean"):
+    b_target = random_reachable_target()
+    judge = train_default_judge()
+    base_target = lambda t: b_target
+
+    arm = forward_kinematics_3d
+    cfg = ACOCfg()
+    planner = ACOPlanner(arm, cfg, b_target)
+    dist, states = planner.fit()
+    aco_final = planner.idx_to_angles(states[-1])
+
+    # 📌 ACO 경로 저장 (엔드이펙터 좌표 시퀀스)
+    aco_path = [arm(planner.idx_to_angles(s))[-1] for s in states]
+
+    return hpso_sliding_window_with_svm(
+        base_target, judge,
+        aco_path=aco_path,
+        max_iterations=150,
+        visualize_every=50,
+        target_margin=target_margin,
+        w_margin=w_margin,
+        reduction=reduction
+    )
+if __name__ == "__main__":
+    # 🎯 타깃 & 🚧 장애물
+    target = random_reachable_target()
+    obstacles = random_obstacles(n=3, radius=0.8)
+
+    # ACO 실행 (장애물 포함)
+    cfg = ACOCfg()
+    planner = ACOPlanner(forward_kinematics_3d, cfg, target, obstacles=obstacles)
+    dist, states = planner.fit()
+    aco_path = [forward_kinematics_3d(planner.idx_to_angles(s))[-1] for s in states]
+
+    # Judge (더미)
+    judge =  judge = train_default_judge()
+
+    # HPSO 실행 (장애물 포함)
+    (final_angles, final_error,
+     gbest_positions_history, gbest_fitness_history,
+     targets_history, total_evaluations) = hpso_sliding_window_with_svm(
+        lambda t: target, judge, aco_path,
+        obstacles=obstacles,
+        max_iterations=100,
+        visualize_every=20)
+
+    # 결과 출력
+    print("\n=== 최종 결과 ===")
+    print("Final Angles:", final_angles)
+    print("Final Error:", final_error)
+    print("Target:", target)
+    print("Obstacles:", obstacles)
+
+    # 최종 시각화
+    visualize_3d_only(target, final_angles,
+                      gbest_positions_history,
+                      len(gbest_positions_history),
+                      final_error, total_evaluations,
+                      obstacles=obstacles)
