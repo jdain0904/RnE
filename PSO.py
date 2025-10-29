@@ -115,6 +115,7 @@ def send_trajectory_to_robot(trajectory, speed=50, delay=0.1, mc=None):
         if mc is not None:
             # 실제 로봇에 전송
             mc.send_angles(angle_list, speed)
+             print(f"Step {i+1}/{len(trajectory)}: Sent {angle_list}")
    
         # 다음 명령 전 대기
         if delay > 0:
@@ -143,4 +144,4 @@ if __name__=="__main__":
         speed=50,
         delay=0.1  # 실제 전송 시에는 0.1 이상 권장
     )
-    print("asdf")
+    print("system executed successfully")
